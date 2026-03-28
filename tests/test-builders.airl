@@ -1,0 +1,111 @@
+;; ══════════════════════════════════════════════════════════════
+;; CairLI — Builder Tests
+;; ══════════════════════════════════════════════════════════════
+
+;; Helper: check condition or fail
+(defn check
+  :sig [(cond : Bool) (msg : String) -> _]
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if cond nil (do (print (str "FAIL: " msg "\n")) (exit 1))))
+
+;; Test cairli-app
+(let (app : _ (cairli-app (map-from ["name" "test-app" "version" "1.0.0" "description" "A test"])))
+  (do
+    (check (map-has app "name") "app has name")
+    (check (map-has app "flags") "app has flags")
+    (check (map-has app "positionals") "app has positionals")
+    (check (= (map-get app "name") "test-app") "name is test-app")
+    (check (empty? (map-get app "flags")) "flags is empty")
+    (check (empty? (map-get app "positionals")) "positionals is empty")
+    (print "PASS: cairli-app\n")))
+
+;; Test cairli-add-flag
+(let (app : _ (cairli-app (map-from ["name" "test-app"])))
+     (app2 : _ (cairli-add-flag app (map-from ["name" "verbose" "short" "v" "type" "bool" "help" "Be verbose"])))
+     (flags : List (map-get app2 "flags"))
+     (f : _ (at flags 0))
+  (do
+    (check (= (length flags) 1) "one flag")
+    (check (= (map-get f "name") "verbose") "flag name")
+    (check (= (map-get f "short") "v") "flag short")
+    (check (= (map-get f "type") "bool") "flag type")
+    (print "PASS: cairli-add-flag\n")))
+
+;; Test default type is "string"
+(let (app : _ (cairli-app (map-from ["name" "test-app"])))
+     (app2 : _ (cairli-add-flag app (map-from ["name" "output" "help" "Output path"])))
+     (f : _ (at (map-get app2 "flags") 0))
+  (do
+    (check (= (map-get f "type") "string") "default type is string")
+    (print "PASS: flag type defaults to string\n")))
+
+;; Test cairli-add-positional
+(let (app : _ (cairli-app (map-from ["name" "test-app"])))
+     (app2 : _ (cairli-add-positional app (map-from ["name" "file" "help" "Input file"])))
+     (p : _ (at (map-get app2 "positionals") 0))
+  (do
+    (check (= (map-get p "name") "file") "positional name")
+    (check (= (map-get p "type") "string") "positional type")
+    (check (= (map-get p "required") true) "positional required")
+    (print "PASS: cairli-add-positional\n")))
+
+;; Test multiple flags accumulate
+(let (app : _ (cairli-app (map-from ["name" "test-app"])))
+     (app2 : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app3 : _ (cairli-add-flag app2 (map-from ["name" "port" "type" "int" "default" "8080"])))
+     (app4 : _ (cairli-add-flag app3 (map-from ["name" "output" "help" "Output file"])))
+     (flags : List (map-get app4 "flags"))
+  (do
+    (check (= (length flags) 3) "three flags")
+    (check (= (map-get (at flags 0) "name") "verbose") "first flag")
+    (check (= (map-get (at flags 1) "name") "port") "second flag")
+    (check (= (map-get (at flags 2) "name") "output") "third flag")
+    (print "PASS: multiple flags accumulate\n")))
+
+;; Test internal helpers
+(do
+  (check (cairli--is-digit-char "0") "0 is digit")
+  (check (cairli--is-digit-char "9") "9 is digit")
+  (check (not (cairli--is-digit-char "a")) "a not digit")
+  (check (not (cairli--is-digit-char "-")) "- not digit")
+  (print "PASS: cairli--is-digit-char\n"))
+
+(do
+  (check (cairli--is-int-string "42") "42 is int")
+  (check (cairli--is-int-string "-7") "-7 is int")
+  (check (cairli--is-int-string "0") "0 is int")
+  (check (not (cairli--is-int-string "")) "empty not int")
+  (check (not (cairli--is-int-string "-")) "- not int")
+  (check (not (cairli--is-int-string "abc")) "abc not int")
+  (check (not (cairli--is-int-string "12.5")) "12.5 not int")
+  (print "PASS: cairli--is-int-string\n"))
+
+(do
+  (match (cairli--safe-parse-int "42")
+    (Ok v) (check (= v 42) "42 = 42")
+    (Err _) (do (print "FAIL: 42 should parse\n") (exit 1)))
+  (match (cairli--safe-parse-int "-7")
+    (Ok v) (check (= v -7) "-7 = -7")
+    (Err _) (do (print "FAIL: -7 should parse\n") (exit 1)))
+  (match (cairli--safe-parse-int "abc")
+    (Ok _) (do (print "FAIL: abc should fail\n") (exit 1))
+    (Err _) nil)
+  (match (cairli--safe-parse-int "")
+    (Ok _) (do (print "FAIL: empty should fail\n") (exit 1))
+    (Err _) nil)
+  (print "PASS: cairli--safe-parse-int\n"))
+
+(do
+  (match (cairli--parse-bool-value "true")
+    (Ok v) (check (= v true) "true parses")
+    (Err _) (do (print "FAIL: true should parse\n") (exit 1)))
+  (match (cairli--parse-bool-value "false")
+    (Ok v) (check (= v false) "false parses")
+    (Err _) (do (print "FAIL: false should parse\n") (exit 1)))
+  (match (cairli--parse-bool-value "yes")
+    (Ok _) (do (print "FAIL: yes should fail\n") (exit 1))
+    (Err _) nil)
+  (print "PASS: cairli--parse-bool-value\n"))
+
+(print "\nAll builder tests passed!\n")

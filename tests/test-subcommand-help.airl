@@ -1,0 +1,42 @@
+;; CairLI — Subcommand Help Tests
+
+(defn check
+  :sig [(cond : Bool) (msg : String) -> _]
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if cond nil (do (print (str "FAIL: " msg "\n")) (exit 1))))
+
+;; Test app with subcommands has correct structure for help
+(let (app : _ (cairli-app (map-from ["name" "kafka-cli" "version" "0.1.0"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "broker" "short" "b" "default" "localhost:9092"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "produce" "help" "Produce messages"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "consume" "help" "Consume messages"])))
+     (subcmds : List (map-get app "subcommands"))
+  (do
+    (check (= (length subcmds) 2) "two subcommands")
+    (check (= (map-get (at subcmds 0) "name") "produce") "produce registered")
+    (check (= (map-get (at subcmds 0) "help") "Produce messages") "produce help text")
+    (print "PASS: subcommand app structure for help\n")))
+
+;; Test merged flag list
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run" "help" "Run"])))
+     (app : _ (cairli-subcommand-flag app "run" (map-from ["name" "port" "type" "int"])))
+     (subcmd : _ (cairli--find-subcommand (map-get app "subcommands") "run"))
+     (global-flags : List (map-get app "flags"))
+     (sub-flags : List (map-get subcmd "flags"))
+     (merged : List (concat sub-flags global-flags))
+  (do
+    (check (= (length merged) 2) "merged has 2 flags")
+    (check (= (map-get (at merged 0) "name") "port") "subcommand flag first")
+    (check (= (map-get (at merged 1) "name") "verbose") "global flag second")
+    (print "PASS: merged flags for subcommand help\n")))
+
+;; Test cairli--format-subcommand-label
+(let (label : String (cairli--format-subcommand-label (map-from ["name" "produce" "help" "Produce messages"])))
+  (do
+    (check (contains label "produce") "label has name")
+    (print "PASS: format-subcommand-label\n")))
+
+(print "\nAll subcommand help tests passed!\n")

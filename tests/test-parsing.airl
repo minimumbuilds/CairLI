@@ -1,0 +1,144 @@
+;; ══════════════════════════════════════════════════════════════
+;; CairLI — Parsing Integration Tests
+;; ══════════════════════════════════════════════════════════════
+
+;; Helper: check condition or fail
+(defn check
+  :sig [(cond : Bool) (msg : String) -> _]
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if cond nil (do (print (str "FAIL: " msg "\n")) (exit 1))))
+
+;; Build a test app
+(defn make-test-app
+  :sig [-> _]
+  :ensures [(valid result)]
+  :body (let (app : _ (cairli-app (map-from ["name" "mytool" "version" "1.0.0" "description" "Test tool"])))
+              (app : _ (cairli-add-flag app (map-from ["name" "verbose" "short" "v" "type" "bool" "help" "Verbose"])))
+              (app : _ (cairli-add-flag app (map-from ["name" "port" "short" "p" "type" "int" "default" "8080" "help" "Port"])))
+              (app : _ (cairli-add-flag app (map-from ["name" "output" "short" "o" "help" "Output file"])))
+              (app : _ (cairli-add-positional app (map-from ["name" "file" "help" "Input file"])))
+           app))
+
+;; Test 1: Full parse with all flags and positional
+(let (result : _ (cairli-run (make-test-app) ["mytool" "--verbose" "--port" "3000" "--output" "out.txt" "input.txt"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") true) "verbose=true")
+      (check (= (cairli-flag ctx "port") 3000) "port=3000")
+      (check (= (cairli-flag ctx "output") "out.txt") "output=out.txt")
+      (check (= (cairli-positional ctx "file") "input.txt") "file=input.txt")
+      (print "PASS: full parse\n"))
+    (Err e) (do (print (str "FAIL: full parse: " e "\n")) (exit 1))))
+
+;; Test 2: Defaults applied
+(let (result : _ (cairli-run (make-test-app) ["mytool" "input.txt"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") false) "verbose=false default")
+      (check (= (cairli-flag ctx "port") 8080) "port=8080 default")
+      (check (= (cairli-positional ctx "file") "input.txt") "file=input.txt")
+      (print "PASS: defaults applied\n"))
+    (Err e) (do (print (str "FAIL: defaults: " e "\n")) (exit 1))))
+
+;; Test 3: Short flags
+(let (result : _ (cairli-run (make-test-app) ["mytool" "-v" "-p" "9090" "file.txt"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") true) "short verbose")
+      (check (= (cairli-flag ctx "port") 9090) "short port")
+      (check (= (cairli-positional ctx "file") "file.txt") "short file")
+      (print "PASS: short flags\n"))
+    (Err e) (do (print (str "FAIL: short flags: " e "\n")) (exit 1))))
+
+;; Test 4: Missing required positional
+(let (result : _ (cairli-run (make-test-app) ["mytool" "--verbose"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for missing positional\n") (exit 1))
+    (Err e) (do
+      (check (contains e "missing required argument") "error mentions missing")
+      (check (contains e "file") "error mentions file")
+      (print "PASS: missing required positional\n"))))
+
+;; Test 5: Unknown flag
+(let (result : _ (cairli-run (make-test-app) ["mytool" "--unknown" "file.txt"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for unknown flag\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unknown flag") "error mentions unknown")
+      (print "PASS: unknown flag\n"))))
+
+;; Test 6: Bad int value
+(let (result : _ (cairli-run (make-test-app) ["mytool" "--port" "abc" "file.txt"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for bad int\n") (exit 1))
+    (Err e) (do
+      (check (contains e "invalid integer") "error mentions invalid")
+      (print "PASS: bad int value\n"))))
+
+;; Test 7: Flag missing value
+(let (result : _ (cairli-run (make-test-app) ["mytool" "--port"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for missing value\n") (exit 1))
+    (Err e) (do
+      (check (contains e "requires a value") "error mentions requires value")
+      (print "PASS: flag missing value\n"))))
+
+;; Test 8: Unexpected extra argument
+(let (result : _ (cairli-run (make-test-app) ["mytool" "file1.txt" "file2.txt"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for extra arg\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unexpected argument") "error mentions unexpected")
+      (print "PASS: unexpected extra argument\n"))))
+
+;; Test 9: Empty args (just program name)
+(let (result : _ (cairli-run (make-test-app) ["mytool"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for no args\n") (exit 1))
+    (Err e) (do
+      (check (contains e "missing required argument") "error mentions missing")
+      (print "PASS: empty args\n"))))
+
+;; Test 10: Unknown short flag
+(let (result : _ (cairli-run (make-test-app) ["mytool" "-x" "file.txt"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for unknown short\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unknown flag") "error mentions unknown")
+      (print "PASS: unknown short flag\n"))))
+
+;; Test 11: Positional-only app
+(let (app : _ (cairli-app (map-from ["name" "simple"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "name" "help" "Your name"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "greeting" "help" "Greeting" "required" false])))
+     (result : _ (cairli-run app ["simple" "Alice"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "name") "Alice") "name=Alice")
+      (print "PASS: positional-only app\n"))
+    (Err e) (do (print (str "FAIL: positional-only: " e "\n")) (exit 1))))
+
+;; Test 12: Missing required flag
+(let (app : _ (cairli-app (map-from ["name" "req-test"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "config" "type" "string" "required" true "help" "Config"])))
+     (result : _ (cairli-run app ["req-test"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for missing required flag\n") (exit 1))
+    (Err e) (do
+      (check (contains e "missing required flag") "error mentions missing flag")
+      (check (contains e "config") "error mentions config")
+      (print "PASS: missing required flag\n"))))
+
+;; Test 13: Negative integer
+(let (app : _ (cairli-app (map-from ["name" "neg-test"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "offset" "type" "int" "help" "Offset"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["neg-test" "--offset" "-5"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "offset") -5) "offset=-5")
+      (print "PASS: negative integer\n"))
+    (Err e) (do (print (str "FAIL: negative int: " e "\n")) (exit 1))))
+
+(print "\nAll parsing tests passed!\n")

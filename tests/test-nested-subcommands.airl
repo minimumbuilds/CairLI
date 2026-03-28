@@ -1,0 +1,76 @@
+;; CairLI — Nested Subcommand Tests
+
+(defn check
+  :sig [(cond : Bool) (msg : String) -> _]
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if cond nil (do (print (str "FAIL: " msg "\n")) (exit 1))))
+
+;; Test cairli-add-nested-subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "topic" "help" "Topic ops"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "list" "help" "List topics"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "create" "help" "Create topic"])))
+     (subcmds : List (map-get app "subcommands"))
+     (topic : _ (at subcmds 0))
+     (nested : List (map-get topic "subcommands"))
+  (do
+    (check (= (length nested) 2) "two nested subcommands")
+    (check (= (map-get (at nested 0) "name") "list") "first nested is list")
+    (check (= (map-get (at nested 1) "name") "create") "second nested is create")
+    (check (map-has (at nested 0) "flags") "nested has flags")
+    (check (map-has (at nested 0) "positionals") "nested has positionals")
+    (print "PASS: cairli-add-nested-subcommand\n")))
+
+;; Test nested subcommand parsing: topic create
+(let (app : _ (cairli-app (map-from ["name" "kafka-cli"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "broker" "short" "b" "default" "localhost:9092"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "topic" "help" "Topic ops"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "create" "help" "Create topic"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "list" "help" "List topics"])))
+     (result : _ (cairli-run app ["kafka-cli" "topic" "create"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "topic create") "subcommand is topic create")
+      (check (= (cairli-flag ctx "broker") "localhost:9092") "global default broker")
+      (print "PASS: nested subcommand parsing\n"))
+    (Err e) (do (print (str "FAIL: nested: " e "\n")) (exit 1))))
+
+;; Test nested subcommand with global flag before
+(let (app : _ (cairli-app (map-from ["name" "cli"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "db" "help" "Database"])))
+     (app : _ (cairli-add-nested-subcommand app "db" (map-from ["name" "migrate" "help" "Run migrations"])))
+     (result : _ (cairli-run app ["cli" "--verbose" "db" "migrate"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "db migrate") "path is db migrate")
+      (check (= (cairli-flag ctx "verbose") true) "verbose global flag")
+      (print "PASS: nested with global flag before\n"))
+    (Err e) (do (print (str "FAIL: nested+global: " e "\n")) (exit 1))))
+
+;; Test missing nested subcommand
+(let (app : _ (cairli-app (map-from ["name" "cli"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "db"])))
+     (app : _ (cairli-add-nested-subcommand app "db" (map-from ["name" "migrate"])))
+     (result : _ (cairli-run app ["cli" "db"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for missing nested subcmd\n") (exit 1))
+    (Err e) (do
+      (check (contains e "missing subcommand") "error mentions missing")
+      (check (contains e "db") "error mentions parent")
+      (print "PASS: missing nested subcommand error\n"))))
+
+;; Test unknown nested subcommand
+(let (app : _ (cairli-app (map-from ["name" "cli"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "db"])))
+     (app : _ (cairli-add-nested-subcommand app "db" (map-from ["name" "migrate"])))
+     (result : _ (cairli-run app ["cli" "db" "bogus"]))
+  (match result
+    (Ok _) (do (print "FAIL: should error for unknown nested subcmd\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unknown command") "error mentions unknown")
+      (check (contains e "bogus") "error mentions bogus")
+      (print "PASS: unknown nested subcommand error\n"))))
+
+(print "\nAll nested subcommand tests passed!\n")

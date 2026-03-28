@@ -1,0 +1,458 @@
+;; ══════════════════════════════════════════════════════════════
+;; CairLI — Comprehensive Test Suite
+;; Tests edge cases, ordering, accessors, internals, and
+;; boundary conditions not covered by basic test files.
+;; ══════════════════════════════════════════════════════════════
+
+;; Helper: check condition or fail with message
+(defn check
+  :sig [(cond : Bool) (msg : String) -> _]
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if cond nil (do (print (str "FAIL: " msg "\n")) (exit 1))))
+
+;; ── Section 1: Internal Helpers ──────────────────────────────
+
+;; 1.1 cairli--is-digit-char edge cases
+(do
+  (check (cairli--is-digit-char "5") "5 is digit")
+  (check (not (cairli--is-digit-char " ")) "space not digit")
+  (check (not (cairli--is-digit-char "+")) "+ not digit")
+  (check (not (cairli--is-digit-char ".")) ". not digit")
+  (print "PASS: 1.1 is-digit-char edge cases\n"))
+
+;; 1.2 cairli--is-int-string edge cases
+(do
+  (check (cairli--is-int-string "0") "0 is int")
+  (check (cairli--is-int-string "-0") "-0 is int")
+  (check (cairli--is-int-string "999999") "large number")
+  (check (cairli--is-int-string "-999999") "large negative")
+  (check (not (cairli--is-int-string " 42")) "leading space not int")
+  (check (not (cairli--is-int-string "42 ")) "trailing space not int")
+  (check (not (cairli--is-int-string "--5")) "double dash not int")
+  (check (not (cairli--is-int-string "1e5")) "scientific notation not int")
+  (check (not (cairli--is-int-string "+5")) "plus prefix not int")
+  (print "PASS: 1.2 is-int-string edge cases\n"))
+
+;; 1.3 cairli--safe-parse-int edge cases
+(do
+  (match (cairli--safe-parse-int "0")
+    (Ok v) (check (= v 0) "parse 0")
+    (Err _) (do (print "FAIL: 0 should parse\n") (exit 1)))
+  (match (cairli--safe-parse-int "-0")
+    (Ok v) (check (= v 0) "parse -0")
+    (Err _) (do (print "FAIL: -0 should parse\n") (exit 1)))
+  (match (cairli--safe-parse-int " ")
+    (Ok _) (do (print "FAIL: space should fail\n") (exit 1))
+    (Err _) nil)
+  (match (cairli--safe-parse-int "3.14")
+    (Ok _) (do (print "FAIL: float should fail\n") (exit 1))
+    (Err _) nil)
+  (print "PASS: 1.3 safe-parse-int edge cases\n"))
+
+;; 1.4 cairli--parse-bool-value edge cases
+(do
+  (match (cairli--parse-bool-value "TRUE")
+    (Ok _) (do (print "FAIL: TRUE uppercase should fail\n") (exit 1))
+    (Err _) nil)
+  (match (cairli--parse-bool-value "1")
+    (Ok _) (do (print "FAIL: 1 should fail\n") (exit 1))
+    (Err _) nil)
+  (match (cairli--parse-bool-value "")
+    (Ok _) (do (print "FAIL: empty should fail\n") (exit 1))
+    (Err _) nil)
+  (print "PASS: 1.4 parse-bool-value edge cases\n"))
+
+;; 1.5 cairli--parse-typed-value
+(do
+  (match (cairli--parse-typed-value "hello" "string")
+    (Ok v) (check (= v "hello") "string type")
+    (Err _) (do (print "FAIL: string type\n") (exit 1)))
+  (match (cairli--parse-typed-value "42" "int")
+    (Ok v) (check (= v 42) "int type")
+    (Err _) (do (print "FAIL: int type\n") (exit 1)))
+  (match (cairli--parse-typed-value "true" "bool")
+    (Ok v) (check (= v true) "bool type")
+    (Err _) (do (print "FAIL: bool type\n") (exit 1)))
+  (match (cairli--parse-typed-value "hello" "unknown-type")
+    (Ok _) (do (print "FAIL: unknown type should fail\n") (exit 1))
+    (Err e) (check (contains e "unknown type") "unknown type error"))
+  (print "PASS: 1.5 parse-typed-value\n"))
+
+;; ── Section 2: Flag Lookup ───────────────────────────────────
+
+;; 2.1 cairli--find-flag-by-long
+(do
+  (let (flags : List [(map-from ["name" "verbose" "type" "bool"])
+                      (map-from ["name" "port" "type" "int" "short" "p"])])
+       (found : _ (cairli--find-flag-by-long flags "port"))
+       (not-found : _ (cairli--find-flag-by-long flags "missing"))
+    (do
+      (check (not (= found nil)) "found port")
+      (check (= (map-get found "name") "port") "found correct flag")
+      (check (= not-found nil) "missing returns nil")
+      (print "PASS: 2.1 find-flag-by-long\n"))))
+
+;; 2.2 cairli--find-flag-by-short
+(do
+  (let (flags : List [(map-from ["name" "verbose" "short" "v" "type" "bool"])
+                      (map-from ["name" "port" "type" "int"])])
+       (found : _ (cairli--find-flag-by-short flags "v"))
+       (not-found : _ (cairli--find-flag-by-short flags "x"))
+       (no-short : _ (cairli--find-flag-by-short flags "p"))
+    (do
+      (check (not (= found nil)) "found v")
+      (check (= (map-get found "name") "verbose") "found correct flag")
+      (check (= not-found nil) "x not found")
+      (check (= no-short nil) "port has no short")
+      (print "PASS: 2.2 find-flag-by-short\n"))))
+
+;; ── Section 3: Defaults ──────────────────────────────────────
+
+;; 3.1 cairli--apply-defaults
+(do
+  (let (flags : List [(map-from ["name" "port" "type" "int" "default" "3000"])
+                      (map-from ["name" "verbose" "type" "bool"])
+                      (map-from ["name" "host" "default" "localhost"])
+                      (map-from ["name" "output" "type" "string"])])
+       (defaults : _ (cairli--apply-defaults flags))
+    (do
+      (match (cairli--parse-typed-value "3000" "int")
+        (Ok expected-port) (check (= (map-get defaults "port") expected-port) "port default 3000")
+        (Err _) nil)
+      (check (= (map-get defaults "verbose") false) "bool default false")
+      (check (= (map-get defaults "host") "localhost") "host default localhost")
+      (check (= (map-get defaults "output") nil) "no default for output")
+      (print "PASS: 3.1 apply-defaults\n"))))
+
+;; ── Section 4: Format & Help ─────────────────────────────────
+
+;; 4.1 cairli--format-flag-label
+(do
+  (let (label1 : String (cairli--format-flag-label (map-from ["name" "verbose" "short" "v" "type" "bool"])))
+       (label2 : String (cairli--format-flag-label (map-from ["name" "port" "short" "p" "type" "int"])))
+       (label3 : String (cairli--format-flag-label (map-from ["name" "output" "type" "string"])))
+       (label4 : String (cairli--format-flag-label (map-from ["name" "config"])))
+    (do
+      (check (contains label1 "-v") "short flag in label")
+      (check (contains label1 "--verbose") "long flag in label")
+      (check (not (contains label1 "<")) "bool has no type hint")
+      (check (contains label2 "<int>") "int type hint")
+      (check (contains label3 "--output") "no short, has long")
+      (check (contains label3 "<string>") "string type hint")
+      (check (contains label4 "<string>") "default type in label")
+      (print "PASS: 4.1 format-flag-label\n"))))
+
+;; ── Section 5: Parsing Ordering & Interleaving ───────────────
+
+;; 5.1 Flags after positional
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "file"])))
+     (result : _ (cairli-run app ["tool" "input.txt" "--verbose"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") true) "flag after positional")
+      (check (= (cairli-positional ctx "file") "input.txt") "positional before flag")
+      (print "PASS: 5.1 flags after positional\n"))
+    (Err e) (do (print (str "FAIL: 5.1: " e "\n")) (exit 1))))
+
+;; 5.2 Interleaved flags and positionals
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "count" "type" "int" "default" "1"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "src"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "dst"])))
+     (result : _ (cairli-run app ["tool" "a.txt" "--count" "5" "b.txt"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "src") "a.txt") "first positional")
+      (check (= (cairli-positional ctx "dst") "b.txt") "second positional")
+      (check (= (cairli-flag ctx "count") 5) "interleaved flag")
+      (print "PASS: 5.2 interleaved flags and positionals\n"))
+    (Err e) (do (print (str "FAIL: 5.2: " e "\n")) (exit 1))))
+
+;; 5.3 Multiple positionals all filled
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "src"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "dst"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "fmt" "required" false])))
+     (result : _ (cairli-run app ["tool" "in.txt" "out.txt" "json"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "src") "in.txt") "first")
+      (check (= (cairli-positional ctx "dst") "out.txt") "second")
+      (check (= (cairli-positional ctx "fmt") "json") "third optional")
+      (print "PASS: 5.3 multiple positionals all filled\n"))
+    (Err e) (do (print (str "FAIL: 5.3: " e "\n")) (exit 1))))
+
+;; 5.4 Multiple positionals — optional omitted
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "src"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "dst"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "fmt" "required" false])))
+     (result : _ (cairli-run app ["tool" "in.txt" "out.txt"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "src") "in.txt") "first")
+      (check (= (cairli-positional ctx "dst") "out.txt") "second")
+      (check (= (cairli-positional ctx "fmt") nil) "optional not set")
+      (print "PASS: 5.4 optional positional omitted\n"))
+    (Err e) (do (print (str "FAIL: 5.4: " e "\n")) (exit 1))))
+
+;; ── Section 6: Edge Cases ────────────────────────────────────
+
+;; 6.1 Completely empty raw-args list
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "file" "required" false])))
+     (result : _ (cairli-run app []))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "file") nil) "no positional from empty args")
+      (print "PASS: 6.1 empty raw-args\n"))
+    (Err e) (do (print (str "FAIL: 6.1: " e "\n")) (exit 1))))
+
+;; 6.2 Flags-only app (no positionals)
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "level" "type" "int" "default" "1"])))
+     (result : _ (cairli-run app ["tool" "--verbose" "--level" "3"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") true) "verbose set")
+      (check (= (cairli-flag ctx "level") 3) "level set")
+      (print "PASS: 6.2 flags-only app\n"))
+    (Err e) (do (print (str "FAIL: 6.2: " e "\n")) (exit 1))))
+
+;; 6.3 No flags, no positionals (bare app)
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (result : _ (cairli-run app ["tool"]))
+  (match result
+    (Ok _) (print "PASS: 6.3 bare app\n")
+    (Err e) (do (print (str "FAIL: 6.3: " e "\n")) (exit 1))))
+
+;; 6.4 Empty string as flag value
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "prefix" "help" "Prefix"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "--prefix" ""]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "prefix") "") "empty string value")
+      (print "PASS: 6.4 empty string flag value\n"))
+    (Err e) (do (print (str "FAIL: 6.4: " e "\n")) (exit 1))))
+
+;; 6.5 Flag value that looks like a flag (e.g. --output --verbose)
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "output" "help" "Output"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "--output" "--weird-value"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "output") "--weird-value") "flag-like value accepted")
+      (print "PASS: 6.5 flag value looks like flag\n"))
+    (Err e) (do (print (str "FAIL: 6.5: " e "\n")) (exit 1))))
+
+;; 6.6 Zero as int flag value
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "count" "type" "int"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "--count" "0"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "count") 0) "zero int value")
+      (print "PASS: 6.6 zero int flag\n"))
+    (Err e) (do (print (str "FAIL: 6.6: " e "\n")) (exit 1))))
+
+;; 6.7 Same flag specified twice (last wins)
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "port" "type" "int" "default" "80"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "--port" "3000" "--port" "9090"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "port") 9090) "last value wins")
+      (print "PASS: 6.7 duplicate flag last wins\n"))
+    (Err e) (do (print (str "FAIL: 6.7: " e "\n")) (exit 1))))
+
+;; 6.8 Bool flag toggled twice (stays true)
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "--verbose" "--verbose"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") true) "double bool still true")
+      (print "PASS: 6.8 double bool flag\n"))
+    (Err e) (do (print (str "FAIL: 6.8: " e "\n")) (exit 1))))
+
+;; 6.9 --flag=value syntax errors clearly
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "port" "type" "int"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "--port=8080"]))
+  (match result
+    (Ok _) (do (print "FAIL: 6.9 --port=8080 should not silently succeed\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unknown flag") "equals syntax rejected")
+      (print "PASS: 6.9 equals syntax rejected\n"))))
+
+;; ── Section 7: Accessor Functions ────────────────────────────
+
+;; 7.1 cairli-flag for missing key returns nil
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (result : _ (cairli-run app ["tool"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "nonexistent") nil) "missing flag = nil")
+      (print "PASS: 7.1 missing flag returns nil\n"))
+    (Err e) (do (print (str "FAIL: 7.1: " e "\n")) (exit 1))))
+
+;; 7.2 cairli-positional for missing key returns nil
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "file" "required" false])))
+     (result : _ (cairli-run app ["tool"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "file") nil) "omitted optional = nil")
+      (check (= (cairli-positional ctx "nonexistent") nil) "nonexistent pos = nil")
+      (print "PASS: 7.2 missing positional returns nil\n"))
+    (Err e) (do (print (str "FAIL: 7.2: " e "\n")) (exit 1))))
+
+;; ── Section 8: Builder Edge Cases ────────────────────────────
+
+;; 8.1 App preserves extra config keys
+(let (app : _ (cairli-app (map-from ["name" "tool" "version" "2.0" "custom-key" "custom-val"])))
+  (do
+    (check (= (map-get app "custom-key") "custom-val") "extra keys preserved")
+    (print "PASS: 8.1 extra config keys preserved\n")))
+
+;; 8.2 Flag with explicit required=true
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "token" "required" true])))
+     (result : _ (cairli-run app ["tool" "--token" "abc123"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "token") "abc123") "required flag provided")
+      (print "PASS: 8.2 required flag provided\n"))
+    (Err e) (do (print (str "FAIL: 8.2: " e "\n")) (exit 1))))
+
+;; 8.3 Positional with explicit required=false
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "file" "required" false])))
+     (result : _ (cairli-run app ["tool"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "file") nil) "optional positional not set")
+      (print "PASS: 8.3 optional positional omitted\n"))
+    (Err e) (do (print (str "FAIL: 8.3: " e "\n")) (exit 1))))
+
+;; ── Section 9: Complex Scenarios ─────────────────────────────
+
+;; 9.1 Realistic CLI: many flags, multiple positionals, interleaved
+(let (app : _ (cairli-app (map-from ["name" "deploy" "version" "3.0.0" "description" "Deploy tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "env" "short" "e" "help" "Environment"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "replicas" "short" "r" "type" "int" "default" "3" "help" "Replica count"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "dry-run" "short" "d" "type" "bool" "help" "Dry run"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "tag" "short" "t" "help" "Image tag"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "service" "help" "Service name"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "region" "help" "Region"])))
+     (result : _ (cairli-run app ["deploy" "-e" "prod" "web-api" "-r" "5" "--dry-run" "-t" "v2.1" "us-east-1"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "env") "prod") "env=prod")
+      (check (= (cairli-flag ctx "replicas") 5) "replicas=5")
+      (check (= (cairli-flag ctx "dry-run") true) "dry-run=true")
+      (check (= (cairli-flag ctx "tag") "v2.1") "tag=v2.1")
+      (check (= (cairli-positional ctx "service") "web-api") "service=web-api")
+      (check (= (cairli-positional ctx "region") "us-east-1") "region=us-east-1")
+      (print "PASS: 9.1 realistic CLI scenario\n"))
+    (Err e) (do (print (str "FAIL: 9.1: " e "\n")) (exit 1))))
+
+;; 9.2 Realistic CLI: only defaults
+(let (app : _ (cairli-app (map-from ["name" "deploy" "version" "3.0.0"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "env" "default" "staging"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "replicas" "type" "int" "default" "1"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "dry-run" "type" "bool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "service"])))
+     (result : _ (cairli-run app ["deploy" "web-api"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "env") "staging") "env default")
+      (check (= (cairli-flag ctx "replicas") 1) "replicas default")
+      (check (= (cairli-flag ctx "dry-run") false) "dry-run default")
+      (check (= (cairli-positional ctx "service") "web-api") "service set")
+      (print "PASS: 9.2 all defaults scenario\n"))
+    (Err e) (do (print (str "FAIL: 9.2: " e "\n")) (exit 1))))
+
+;; 9.3 Mixed short and long flags in same invocation
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "short" "v" "type" "bool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "port" "short" "p" "type" "int"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "host" "short" "H"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "file" "required" false])))
+     (result : _ (cairli-run app ["tool" "-v" "--port" "8080" "-H" "localhost"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") true) "short bool")
+      (check (= (cairli-flag ctx "port") 8080) "long int")
+      (check (= (cairli-flag ctx "host") "localhost") "short string")
+      (print "PASS: 9.3 mixed short and long flags\n"))
+    (Err e) (do (print (str "FAIL: 9.3: " e "\n")) (exit 1))))
+
+;; ── Section 10: Error Message Quality ────────────────────────
+
+;; 10.1 Unknown long flag includes flag name in error
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "--foobar"]))
+  (match result
+    (Ok _) (do (print "FAIL: 10.1\n") (exit 1))
+    (Err e) (do
+      (check (contains e "foobar") "error names the flag")
+      (print "PASS: 10.1 error includes flag name\n"))))
+
+;; 10.2 Unknown short flag includes flag char in error
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "-z"]))
+  (match result
+    (Ok _) (do (print "FAIL: 10.2\n") (exit 1))
+    (Err e) (do
+      (check (contains e "z") "error includes short char")
+      (print "PASS: 10.2 error includes short flag char\n"))))
+
+;; 10.3 Bad int value includes the bad value in error
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "count" "type" "int"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "--count" "xyz"]))
+  (match result
+    (Ok _) (do (print "FAIL: 10.3\n") (exit 1))
+    (Err e) (do
+      (check (contains e "xyz") "error includes bad value")
+      (check (contains e "count") "error includes flag name")
+      (print "PASS: 10.3 error includes bad value and flag\n"))))
+
+;; 10.4 Missing positional includes positional name in error
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "input-file"])))
+     (result : _ (cairli-run app ["tool"]))
+  (match result
+    (Ok _) (do (print "FAIL: 10.4\n") (exit 1))
+    (Err e) (do
+      (check (contains e "input-file") "error names the positional")
+      (print "PASS: 10.4 error includes positional name\n"))))
+
+;; 10.5 Unexpected argument includes the argument value
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (result : _ (cairli-run app ["tool" "surprise-arg"]))
+  (match result
+    (Ok _) (do (print "FAIL: 10.5\n") (exit 1))
+    (Err e) (do
+      (check (contains e "surprise-arg") "error includes the arg")
+      (print "PASS: 10.5 error includes unexpected arg\n"))))
+
+;; ── Summary ──────────────────────────────────────────────────
+
+(print "\nAll comprehensive tests passed!\n")

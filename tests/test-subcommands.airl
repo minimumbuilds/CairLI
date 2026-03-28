@@ -1,0 +1,137 @@
+;; CairLI — Subcommand Tests
+
+(defn check
+  :sig [(cond : Bool) (msg : String) -> _]
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if cond nil (do (print (str "FAIL: " msg "\n")) (exit 1))))
+
+;; Test cairli-add-subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool" "version" "1.0"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve" "help" "Start server"])))
+     (subcmds : List (map-get app "subcommands"))
+     (sc : _ (at subcmds 0))
+  (do
+    (check (= (length subcmds) 1) "one subcommand")
+    (check (= (map-get sc "name") "serve") "subcommand name")
+    (check (= (map-get sc "help") "Start server") "subcommand help")
+    (check (map-has sc "flags") "subcommand has flags list")
+    (check (map-has sc "positionals") "subcommand has positionals list")
+    (check (empty? (map-get sc "flags")) "flags empty")
+    (check (empty? (map-get sc "positionals")) "positionals empty")
+    (print "PASS: cairli-add-subcommand\n")))
+
+;; Test cairli-subcommand-flag
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve" "help" "Serve"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "port" "short" "p" "type" "int" "default" "8080"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "host" "default" "localhost"])))
+     (subcmds : List (map-get app "subcommands"))
+     (sc : _ (at subcmds 0))
+     (flags : List (map-get sc "flags"))
+  (do
+    (check (= (length flags) 2) "two flags on subcommand")
+    (check (= (map-get (at flags 0) "name") "port") "first flag is port")
+    (check (= (map-get (at flags 1) "name") "host") "second flag is host")
+    (print "PASS: cairli-subcommand-flag\n")))
+
+;; Test cairli-subcommand-positional
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run" "help" "Run"])))
+     (app : _ (cairli-subcommand-positional app "run" (map-from ["name" "script" "help" "Script file"])))
+     (subcmds : List (map-get app "subcommands"))
+     (sc : _ (at subcmds 0))
+     (positionals : List (map-get sc "positionals"))
+  (do
+    (check (= (length positionals) 1) "one positional on subcommand")
+    (check (= (map-get (at positionals 0) "name") "script") "positional is script")
+    (print "PASS: cairli-subcommand-positional\n")))
+
+;; Test flag added to non-existent subcommand is a no-op
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (app2 : _ (cairli-subcommand-flag app "nonexistent" (map-from ["name" "port"])))
+  (do
+    (check (= (length (map-get app2 "subcommands")) 1) "still one subcommand")
+    (check (empty? (map-get (at (map-get app2 "subcommands") 0) "flags")) "no flags added")
+    (print "PASS: flag on nonexistent subcommand is no-op\n")))
+
+;; Test cairli--find-subcommand
+(let (subcmds : List [(map-from ["name" "produce" "flags" [] "positionals" [] "subcommands" []])
+                      (map-from ["name" "consume" "flags" [] "positionals" [] "subcommands" []])])
+     (found : _ (cairli--find-subcommand subcmds "produce"))
+     (missing : _ (cairli--find-subcommand subcmds "delete"))
+  (do
+    (check (not (= found nil)) "found produce")
+    (check (= (map-get found "name") "produce") "correct subcommand")
+    (check (= missing nil) "delete not found")
+    (print "PASS: cairli--find-subcommand\n")))
+
+;; Test basic subcommand parsing
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "short" "v" "type" "bool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve" "help" "Serve"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "port" "type" "int" "default" "8080"])))
+     (result : _ (cairli-run app ["tool" "serve" "--port" "3000" "--verbose"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "serve") "subcommand is serve")
+      (check (= (cairli-flag ctx "port") 3000) "port=3000")
+      (check (= (cairli-flag ctx "verbose") true) "verbose=true global")
+      (print "PASS: basic subcommand parsing\n"))
+    (Err e) (do (print (str "FAIL: basic subcommand: " e "\n")) (exit 1))))
+
+;; Test global flag before subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run" "help" "Run"])))
+     (result : _ (cairli-run app ["tool" "--verbose" "run"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "run") "subcommand is run")
+      (check (= (cairli-flag ctx "verbose") true) "verbose before subcmd")
+      (print "PASS: global flag before subcommand\n"))
+    (Err e) (do (print (str "FAIL: global before subcmd: " e "\n")) (exit 1))))
+
+;; Test unknown subcommand errors
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (result : _ (cairli-run app ["tool" "bogus"]))
+  (match result
+    (Ok _) (do (print "FAIL: bogus should error\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unknown command") "error says unknown command")
+      (check (contains e "bogus") "error includes bogus")
+      (print "PASS: unknown subcommand error\n"))))
+
+;; Test missing subcommand errors
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (result : _ (cairli-run app ["tool"]))
+  (match result
+    (Ok _) (do (print "FAIL: missing subcmd should error\n") (exit 1))
+    (Err e) (do
+      (check (contains e "command") "error mentions command")
+      (print "PASS: missing subcommand error\n"))))
+
+;; Test subcommand with positional
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "open" "help" "Open"])))
+     (app : _ (cairli-subcommand-positional app "open" (map-from ["name" "file" "help" "File"])))
+     (result : _ (cairli-run app ["tool" "open" "readme.md"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "open") "subcommand is open")
+      (check (= (cairli-positional ctx "file") "readme.md") "file=readme.md")
+      (print "PASS: subcommand with positional\n"))
+    (Err e) (do (print (str "FAIL: subcmd positional: " e "\n")) (exit 1))))
+
+;; Test cairli-subcommand accessor
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "build"])))
+     (result : _ (cairli-run app ["tool" "build"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "build") "accessor returns build")
+      (print "PASS: cairli-subcommand accessor\n"))
+    (Err e) (do (print (str "FAIL: accessor: " e "\n")) (exit 1))))

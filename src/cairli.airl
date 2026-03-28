@@ -1,0 +1,705 @@
+;; ══════════════════════════════════════════════════════════════
+;; CairLI — CLI Framework for AIRL
+;; v0.1.0
+;; ══════════════════════════════════════════════════════════════
+
+;; ── Internal Helpers ─────────────────────────────────────────
+
+;; Check if a single-character string is a digit 0-9
+(defn cairli--is-digit-char
+  :sig [(c : String) -> Bool]
+  :requires [(valid c)]
+  :ensures [(valid result)]
+  :body (let (code : i64 (char-code c))
+          (if (and (>= code 48) (<= code 57)) true false)))
+
+;; Check if a string represents a valid integer (optional leading -, then digits)
+(defn cairli--is-int-string
+  :sig [(s : String) -> Bool]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (if (= s "")
+          false
+          (let (ch-list : List (chars s))
+               (first : String (head ch-list))
+               (rest-chars : List (tail ch-list))
+            (if (= first "-")
+              (if (empty? rest-chars)
+                false
+                (all (fn [c] (cairli--is-digit-char c)) rest-chars))
+              (all (fn [c] (cairli--is-digit-char c)) ch-list)))))
+
+;; Safe string-to-int that returns Result instead of panicking
+(defn cairli--safe-parse-int
+  :sig [(s : String) -> _]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (if (cairli--is-int-string s)
+          (let (raw : _ (string-to-int s))
+            (match raw
+              (Ok v) (Ok v)
+              _ (Ok raw)))
+          (Err (str "invalid integer: '" s "'"))))
+
+;; Parse a string value to boolean
+(defn cairli--parse-bool-value
+  :sig [(s : String) -> _]
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body (if (= s "true")
+          (Ok true)
+          (if (= s "false")
+            (Ok false)
+            (Err (str "invalid boolean: '" s "' (expected 'true' or 'false')")))))
+
+;; ── Public Builders ──────────────────────────────────────────
+
+;; Create a new CairLI app from a config map
+(defn cairli-app
+  :sig [(config : _) -> _]
+  :requires [(map-has config "name")]
+  :ensures [(map-has result "flags") (map-has result "positionals")]
+  :body (map-set (map-set config "flags" []) "positionals" []))
+
+;; Add a named flag to the app
+(defn cairli-add-flag
+  :sig [(app : _) (flag-config : _) -> _]
+  :requires [(map-has app "flags") (map-has flag-config "name")]
+  :ensures [(valid result)]
+  :body (let (flags : List (map-get app "flags"))
+              (flag : _ (if (map-has flag-config "type")
+                          flag-config
+                          (map-set flag-config "type" "string")))
+           (map-set app "flags" (append flags flag))))
+
+;; Add a positional argument to the app
+(defn cairli-add-positional
+  :sig [(app : _) (pos-config : _) -> _]
+  :requires [(map-has app "positionals") (map-has pos-config "name")]
+  :ensures [(valid result)]
+  :body (let (positionals : List (map-get app "positionals"))
+              (with-type : _ (if (map-has pos-config "type")
+                               pos-config
+                               (map-set pos-config "type" "string")))
+              (pos : _ (if (map-has with-type "required")
+                         with-type
+                         (map-set with-type "required" true)))
+           (map-set app "positionals" (append positionals pos))))
+
+;; Add a subcommand to the app
+(defn cairli-add-subcommand
+  :sig [(app : _) (subcmd-config : _) -> _]
+  :requires [(map-has app "name") (map-has subcmd-config "name")]
+  :ensures [(valid result)]
+  :body (let (subcmds : List (map-get-or app "subcommands" []))
+              (sc : _ (map-set (map-set (map-set subcmd-config
+                        "flags" []) "positionals" []) "subcommands" []))
+           (map-set app "subcommands" (append subcmds sc))))
+
+;; Internal: update a subcommand by name within the subcommands list
+(defn cairli--update-subcommand
+  :sig [(subcmds : List) (name : String) (updater : _) -> List]
+  :requires [(valid subcmds)]
+  :ensures [(valid result)]
+  :body (map (fn [sc]
+               (if (= (map-get sc "name") name)
+                 (updater sc)
+                 sc))
+             subcmds))
+
+;; Add a flag to a specific subcommand
+(defn cairli-subcommand-flag
+  :sig [(app : _) (subcmd-name : String) (flag-config : _) -> _]
+  :requires [(map-has app "name") (map-has flag-config "name")]
+  :ensures [(valid result)]
+  :body (let (subcmds : List (map-get-or app "subcommands" []))
+              (flag : _ (if (map-has flag-config "type")
+                          flag-config
+                          (map-set flag-config "type" "string")))
+              (updated : List (cairli--update-subcommand subcmds subcmd-name
+                                (fn [sc] (map-set sc "flags"
+                                           (append (map-get sc "flags") flag)))))
+           (map-set app "subcommands" updated)))
+
+;; Add a positional to a specific subcommand
+(defn cairli-subcommand-positional
+  :sig [(app : _) (subcmd-name : String) (pos-config : _) -> _]
+  :requires [(map-has app "name") (map-has pos-config "name")]
+  :ensures [(valid result)]
+  :body (let (subcmds : List (map-get-or app "subcommands" []))
+              (with-type : _ (if (map-has pos-config "type")
+                               pos-config
+                               (map-set pos-config "type" "string")))
+              (pos : _ (if (map-has with-type "required")
+                         with-type
+                         (map-set with-type "required" true)))
+              (updated : List (cairli--update-subcommand subcmds subcmd-name
+                                (fn [sc] (map-set sc "positionals"
+                                           (append (map-get sc "positionals") pos)))))
+           (map-set app "subcommands" updated)))
+
+;; Add a nested subcommand under a parent subcommand
+(defn cairli-add-nested-subcommand
+  :sig [(app : _) (parent-name : String) (subcmd-config : _) -> _]
+  :requires [(map-has app "name") (map-has subcmd-config "name")]
+  :ensures [(valid result)]
+  :body (let (subcmds : List (map-get-or app "subcommands" []))
+              (sc : _ (map-set (map-set (map-set subcmd-config
+                        "flags" []) "positionals" []) "subcommands" []))
+              (updated : List (cairli--update-subcommand subcmds parent-name
+                                (fn [parent]
+                                  (let (children : List (map-get-or parent "subcommands" []))
+                                    (map-set parent "subcommands" (append children sc))))))
+           (map-set app "subcommands" updated)))
+
+;; ── Flag Lookup & Type Parsing ───────────────────────────────
+
+;; Find a flag definition by its long name
+(defn cairli--find-flag-by-long
+  :sig [(flags : List) (name : String) -> _]
+  :requires [(valid flags)]
+  :ensures [(valid result)]
+  :body (find (fn [f] (= (map-get f "name") name)) flags))
+
+;; Find a flag definition by its short name
+(defn cairli--find-flag-by-short
+  :sig [(flags : List) (short-name : String) -> _]
+  :requires [(valid flags)]
+  :ensures [(valid result)]
+  :body (find (fn [f] (if (map-has f "short")
+                        (= (map-get f "short") short-name)
+                        false)) flags))
+
+;; Find a subcommand by name within a subcommands list
+(defn cairli--find-subcommand
+  :sig [(subcmds : List) (name : String) -> _]
+  :requires [(valid subcmds)]
+  :ensures [(valid result)]
+  :body (find (fn [sc] (= (map-get sc "name") name)) subcmds))
+
+;; Parse a string value according to a type name
+(defn cairli--parse-typed-value
+  :sig [(value : String) (type-name : String) -> _]
+  :requires [(valid value)]
+  :ensures [(valid result)]
+  :body (if (= type-name "string")
+          (Ok value)
+          (if (= type-name "int")
+            (cairli--safe-parse-int value)
+            (if (= type-name "bool")
+              (cairli--parse-bool-value value)
+              (Err (str "unknown type: " type-name))))))
+
+;; Build initial parsed-flags map with all defaults applied
+(defn cairli--apply-defaults
+  :sig [(flags : List) -> _]
+  :requires [(valid flags)]
+  :ensures [(valid result)]
+  :body (fold (fn [acc flag]
+                (if (map-has flag "default")
+                  (let (name : String (map-get flag "name"))
+                       (type-name : String (map-get-or flag "type" "string"))
+                       (default-str : String (map-get flag "default"))
+                       (parsed : _ (cairli--parse-typed-value default-str type-name))
+                    (match parsed
+                      (Ok val) (map-set acc name val)
+                      (Err _) acc))
+                  (if (= (map-get-or flag "type" "string") "bool")
+                    (map-set acc (map-get flag "name") false)
+                    acc)))
+              (map-new) flags))
+
+;; ── Help Text Generation ─────────────────────────────────────
+
+;; Format a single flag's display label
+(defn cairli--format-flag-label
+  :sig [(flag : _) -> String]
+  :requires [(map-has flag "name")]
+  :ensures [(valid result)]
+  :body (let (name : String (map-get flag "name"))
+              (type-name : String (map-get-or flag "type" "string"))
+              (has-short : Bool (map-has flag "short"))
+              (short-part : String (if has-short
+                                     (str "-" (map-get flag "short") ", ")
+                                     "    "))
+              (type-suffix : String (if (= type-name "bool")
+                                      ""
+                                      (str " <" type-name ">")))
+           (str "  " short-part "--" name type-suffix)))
+
+;; Compute max flag label width for alignment
+(defn cairli--max-flag-width
+  :sig [(flags : List) -> i64]
+  :requires [(valid flags)]
+  :ensures [(>= result 0)]
+  :body (let (builtin-labels : List ["  -h, --help" "  -V, --version"])
+              (flag-labels : List (map (fn [f] (cairli--format-flag-label f)) flags))
+              (all-labels : List (concat builtin-labels flag-labels))
+           (fold (fn [mx label] (max mx (char-count label))) 0 all-labels)))
+
+;; Format a subcommand's display label for help: "    name"
+(defn cairli--format-subcommand-label
+  :sig [(subcmd : _) -> String]
+  :requires [(map-has subcmd "name")]
+  :ensures [(valid result)]
+  :body (str "    " (map-get subcmd "name")))
+
+;; Compute max subcommand label width for alignment
+(defn cairli--max-subcommand-width
+  :sig [(subcmds : List) -> i64]
+  :requires [(valid subcmds)]
+  :ensures [(>= result 0)]
+  :body (fold (fn [mx sc] (max mx (char-count (cairli--format-subcommand-label sc))))
+              0 subcmds))
+
+;; Generate and print full help text, then exit 0
+(defn cairli--print-help
+  :sig [(app : _) -> _]
+  :requires [(map-has app "name")]
+  :ensures [(valid result)]
+  :body (let (name : String (map-get app "name"))
+              (version : String (map-get-or app "version" ""))
+              (description : String (map-get-or app "description" ""))
+              (flags : List (map-get app "flags"))
+              (positionals : List (map-get app "positionals"))
+              (subcmds : List (map-get-or app "subcommands" []))
+              (has-subcmds : Bool (not (empty? subcmds)))
+              (col-width : i64 (+ (cairli--max-flag-width flags) 4))
+           (do
+             (if (= version "")
+               (print (str name "\n"))
+               (print (str name " " version "\n")))
+             (if (= description "")
+               nil
+               (print (str description "\n")))
+             (print "\n")
+
+             ;; Usage line
+             (if has-subcmds
+               (let (opts-part : String (if (empty? flags) "" " [FLAGS]"))
+                 (print (str "USAGE:\n    " name opts-part " <COMMAND>\n")))
+               (let (pos-usage : String (fold (fn [acc p]
+                                                (let (pname : String (map-get p "name"))
+                                                     (required : _ (map-get-or p "required" true))
+                                                  (if required
+                                                    (str acc " <" pname ">")
+                                                    (str acc " [" pname "]"))))
+                                              "" positionals))
+                    (has-flags : Bool (not (empty? flags)))
+                    (opts-part : String (if has-flags " [OPTIONS]" ""))
+                 (print (str "USAGE:\n    " name opts-part pos-usage "\n"))))
+
+             (print "\n")
+
+             ;; Commands section
+             (if has-subcmds
+               (let (sc-col : i64 (+ (cairli--max-subcommand-width subcmds) 4))
+                 (do
+                   (print "COMMANDS:\n")
+                   (fold (fn [_ sc]
+                           (let (label : String (cairli--format-subcommand-label sc))
+                                (help : String (map-get-or sc "help" ""))
+                             (print (str (pad-right label sc-col " ") help "\n"))))
+                         nil subcmds)
+                   (print "\n")))
+               nil)
+
+             ;; Positional args (only without subcommands)
+             (if has-subcmds
+               nil
+               (if (empty? positionals)
+                 nil
+                 (do
+                   (print "ARGS:\n")
+                   (fold (fn [_ p]
+                           (let (pname : String (map-get p "name"))
+                                (help : String (map-get-or p "help" ""))
+                             (print (str "    <" pname ">    " help "\n"))))
+                         nil positionals)
+                   (print "\n"))))
+
+             ;; Options header
+             (if has-subcmds
+               (print "GLOBAL OPTIONS:\n")
+               (print "OPTIONS:\n"))
+
+             (let (help-label : String "  -h, --help")
+                  (ver-label : String "  -V, --version")
+               (do
+                 (print (str (pad-right help-label col-width " ") "Print help information\n"))
+                 (if (= version "")
+                   nil
+                   (print (str (pad-right ver-label col-width " ") "Print version information\n")))))
+
+             (fold (fn [_ flag]
+                     (let (label : String (cairli--format-flag-label flag))
+                          (help : String (map-get-or flag "help" ""))
+                          (has-default : Bool (map-has flag "default"))
+                          (default-suffix : String (if has-default
+                                                     (str " [default: " (map-get flag "default") "]")
+                                                     ""))
+                       (print (str (pad-right label col-width " ") help default-suffix "\n"))))
+                   nil flags)
+
+             (exit 0))))
+
+;; Print subcommand-level help, then exit 0
+(defn cairli--print-subcommand-help
+  :sig [(app : _) (subcmd : _) (subcmd-path : String) -> _]
+  :requires [(map-has app "name") (map-has subcmd "name")]
+  :ensures [(valid result)]
+  :body (let (app-name : String (map-get app "name"))
+              (help-text : String (map-get-or subcmd "help" ""))
+              (global-flags : List (map-get app "flags"))
+              (sc-flags : List (map-get subcmd "flags"))
+              (merged-flags : List (concat sc-flags global-flags))
+              (positionals : List (map-get subcmd "positionals"))
+              (nested : List (map-get-or subcmd "subcommands" []))
+              (has-nested : Bool (not (empty? nested)))
+              (col-width : i64 (+ (cairli--max-flag-width merged-flags) 4))
+           (do
+             (if (= help-text "")
+               (print (str app-name " " subcmd-path "\n"))
+               (print (str app-name " " subcmd-path " — " help-text "\n")))
+             (print "\n")
+
+             (if has-nested
+               (print (str "USAGE:\n    " app-name " " subcmd-path " <COMMAND>\n"))
+               (let (pos-usage : String (fold (fn [acc p]
+                                                (let (pname : String (map-get p "name"))
+                                                     (required : _ (map-get-or p "required" true))
+                                                  (if required
+                                                    (str acc " <" pname ">")
+                                                    (str acc " [" pname "]"))))
+                                              "" positionals))
+                    (opts-part : String (if (empty? merged-flags) "" " [OPTIONS]"))
+                 (print (str "USAGE:\n    " app-name " " subcmd-path opts-part pos-usage "\n"))))
+
+             (print "\n")
+
+             (if has-nested
+               (let (sc-col : i64 (+ (cairli--max-subcommand-width nested) 4))
+                 (do
+                   (print "COMMANDS:\n")
+                   (fold (fn [_ nsc]
+                           (let (label : String (cairli--format-subcommand-label nsc))
+                                (nhelp : String (map-get-or nsc "help" ""))
+                             (print (str (pad-right label sc-col " ") nhelp "\n"))))
+                         nil nested)
+                   (print "\n")))
+               nil)
+
+             (if (empty? positionals)
+               nil
+               (do
+                 (print "ARGS:\n")
+                 (fold (fn [_ p]
+                         (let (pname : String (map-get p "name"))
+                              (phelp : String (map-get-or p "help" ""))
+                           (print (str "    <" pname ">    " phelp "\n"))))
+                       nil positionals)
+                 (print "\n")))
+
+             (print "OPTIONS:\n")
+             (let (help-label : String "  -h, --help")
+               (print (str (pad-right help-label col-width " ") "Print help information\n")))
+             (fold (fn [_ flag]
+                     (let (label : String (cairli--format-flag-label flag))
+                          (fhelp : String (map-get-or flag "help" ""))
+                          (has-default : Bool (map-has flag "default"))
+                          (default-suffix : String (if has-default
+                                                     (str " [default: " (map-get flag "default") "]")
+                                                     ""))
+                       (print (str (pad-right label col-width " ") fhelp default-suffix "\n"))))
+                   nil merged-flags)
+
+             (exit 0))))
+
+;; Print version string, then exit 0
+(defn cairli--print-version
+  :sig [(app : _) -> _]
+  :requires [(map-has app "name")]
+  :ensures [(valid result)]
+  :body (do
+          (print (str (map-get app "name") " " (map-get-or app "version" "") "\n"))
+          (exit 0)))
+
+;; ── Validation ───────────────────────────────────────────────
+
+;; Check that all required flags are present
+(defn cairli--validate-required-flags
+  :sig [(flags : List) (parsed : _) -> _]
+  :requires [(valid flags)]
+  :ensures [(valid result)]
+  :body (let (missing : _ (find (fn [f]
+                                  (if (map-get-or f "required" false)
+                                    (not (map-has parsed (map-get f "name")))
+                                    false))
+                                flags))
+          (if (= missing nil)
+            (Ok parsed)
+            (Err (str "missing required flag: --" (map-get missing "name"))))))
+
+;; Check that all required positionals are present
+(defn cairli--validate-required-positionals
+  :sig [(positionals : List) (parsed : _) -> _]
+  :requires [(valid positionals)]
+  :ensures [(valid result)]
+  :body (let (missing : _ (find (fn [p]
+                                  (if (map-get-or p "required" true)
+                                    (not (map-has parsed (map-get p "name")))
+                                    false))
+                                positionals))
+          (if (= missing nil)
+            (Ok parsed)
+            (Err (str "missing required argument: <" (map-get missing "name") ">")))))
+
+;; ── Core Parser ──────────────────────────────────────────────
+
+;; Handle a flag (long or short) that takes a value
+(defn cairli--handle-value-flag
+  :sig [(app : _) (flag-name : String) (flag-type : String) (rest-args : List) (state : _) -> _]
+  :requires [(valid app)]
+  :ensures [(valid result)]
+  :body (if (empty? rest-args)
+          (Err (str "flag --" flag-name " requires a value"))
+          (let (raw-val : String (head rest-args))
+               (parsed-val : _ (cairli--parse-typed-value raw-val flag-type))
+            (match parsed-val
+              (Err e) (Err (str "flag --" flag-name ": " e))
+              (Ok val) (let (new-flags : _ (map-set (map-get state "flags") flag-name val))
+                            (new-state : _ (map-set state "flags" new-flags))
+                         (cairli--parse-args-loop app (tail rest-args) new-state))))))
+
+;; Handle a flag (long or short) that is boolean
+(defn cairli--handle-bool-flag
+  :sig [(app : _) (flag-name : String) (rest-args : List) (state : _) -> _]
+  :requires [(valid app)]
+  :ensures [(valid result)]
+  :body (let (new-flags : _ (map-set (map-get state "flags") flag-name true))
+              (new-state : _ (map-set state "flags" new-flags))
+           (cairli--parse-args-loop app rest-args new-state)))
+
+;; Handle a matched flag definition
+(defn cairli--handle-flag
+  :sig [(app : _) (flag-def : _) (rest-args : List) (state : _) -> _]
+  :requires [(valid app)]
+  :ensures [(valid result)]
+  :body (let (flag-name : String (map-get flag-def "name"))
+              (flag-type : String (map-get-or flag-def "type" "string"))
+           (if (= flag-type "bool")
+             (cairli--handle-bool-flag app flag-name rest-args state)
+             (cairli--handle-value-flag app flag-name flag-type rest-args state))))
+
+;; Recursive arg parser
+;; state keys: "flags" (Map), "positionals" (Map), "pos-index" (i64)
+(defn cairli--parse-args-loop
+  :sig [(app : _) (args : List) (state : _) -> _]
+  :requires [(valid app) (valid args)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          ;; Done — validate
+          (let (flag-defs : List (map-get app "flags"))
+               (pos-defs : List (map-get app "positionals"))
+               (parsed-flags : _ (map-get state "flags"))
+               (parsed-pos : _ (map-get state "positionals"))
+            (match (cairli--validate-required-flags flag-defs parsed-flags)
+              (Err e) (Err e)
+              (Ok _) (match (cairli--validate-required-positionals pos-defs parsed-pos)
+                       (Err e) (Err e)
+                       (Ok _) (Ok (map-from ["flags" parsed-flags "positionals" parsed-pos])))))
+          ;; Process next arg
+          (let (arg : String (head args))
+               (rest-args : List (tail args))
+               (flag-defs : List (map-get app "flags"))
+            (if (or (= arg "--help") (= arg "-h"))
+              (cairli--print-help app)
+              (if (or (= arg "--version") (= arg "-V"))
+                (cairli--print-version app)
+                ;; Long flag --name
+                (if (if (starts-with arg "--") (> (char-count arg) 2) false)
+                  (let (flag-name : String (substring arg 2 (char-count arg)))
+                       (flag-def : _ (cairli--find-flag-by-long flag-defs flag-name))
+                    (if (= flag-def nil)
+                      (Err (str "unknown flag: --" flag-name))
+                      (cairli--handle-flag app flag-def rest-args state)))
+                  ;; Short flag -x
+                  (if (if (starts-with arg "-") (= (char-count arg) 2) false)
+                    (let (short-name : String (substring arg 1 2))
+                         (flag-def : _ (cairli--find-flag-by-short flag-defs short-name))
+                      (if (= flag-def nil)
+                        (Err (str "unknown flag: -" short-name))
+                        (cairli--handle-flag app flag-def rest-args state)))
+                    ;; Positional argument
+                    (let (pos-defs : List (map-get app "positionals"))
+                         (pos-idx : i64 (map-get state "pos-index"))
+                      (if (>= pos-idx (length pos-defs))
+                        (Err (str "unexpected argument: " arg))
+                        (let (pos-def : _ (at pos-defs pos-idx))
+                             (pos-name : String (map-get pos-def "name"))
+                             (pos-type : String (map-get-or pos-def "type" "string"))
+                             (parsed-val : _ (cairli--parse-typed-value arg pos-type))
+                          (match parsed-val
+                            (Err e) (Err (str "argument <" pos-name ">: " e))
+                            (Ok val) (let (new-pos : _ (map-set (map-get state "positionals") pos-name val))
+                                          (new-state : _ (map-set (map-set state "positionals" new-pos) "pos-index" (+ pos-idx 1)))
+                                       (cairli--parse-args-loop app rest-args new-state)))))))))))))
+
+;; ── Subcommand Parser ────────────────────────────────────
+
+;; Resolve nested subcommand: look through remaining args for the nested command name
+(defn cairli--resolve-nested-subcommand
+  :sig [(app : _) (parent : _) (parent-path : String) (global-flags : List) (args : List) (pre-args : List) -> _]
+  :requires [(valid app)]
+  :ensures [(valid result)]
+  :body (let (nested : List (map-get-or parent "subcommands" []))
+          (if (empty? args)
+            (Err (str "missing subcommand for '" parent-path "'. Available: " (join (map (fn [sc] (map-get sc "name")) nested) ", ")))
+            (let (arg : String (head args))
+                 (rest : List (tail args))
+              (if (or (= arg "--help") (= arg "-h"))
+                (cairli--print-subcommand-help app parent parent-path)
+                (if (starts-with arg "-")
+                  (let (flag-def : _ (if (if (starts-with arg "--") (> (char-count arg) 2) false)
+                                       (cairli--find-flag-by-long global-flags (substring arg 2 (char-count arg)))
+                                       (if (= (char-count arg) 2)
+                                         (cairli--find-flag-by-short global-flags (substring arg 1 2))
+                                         nil)))
+                    (if (= flag-def nil)
+                      (Err (str "unknown flag: " arg))
+                      (if (= (map-get-or flag-def "type" "string") "bool")
+                        (cairli--resolve-nested-subcommand app parent parent-path global-flags rest (append pre-args arg))
+                        (if (empty? rest)
+                          (Err (str "flag " arg " requires a value"))
+                          (cairli--resolve-nested-subcommand app parent parent-path global-flags (tail rest) (append (append pre-args arg) (head rest)))))))
+                  (let (matched : _ (cairli--find-subcommand nested arg))
+                    (if (= matched nil)
+                      (Err (str "unknown command: " parent-path " " arg ". Available: " (join (map (fn [sc] (map-get sc "name")) nested) ", ")))
+                      (let (sc-path : String (str parent-path " " arg))
+                           (merged-flags : List (concat (map-get matched "flags") (concat (map-get parent "flags") global-flags)))
+                           (merged-app : _ (map-from ["name" (map-get app "name")
+                                                      "version" (map-get-or app "version" "")
+                                                      "flags" merged-flags
+                                                      "positionals" (map-get matched "positionals")
+                                                      "subcommands" []
+                                                      "description" (map-get-or matched "help" "")]))
+                           (initial-flags : _ (cairli--apply-defaults merged-flags))
+                           (initial-state : _ (map-from ["flags" initial-flags
+                                                         "positionals" (map-new)
+                                                         "pos-index" 0]))
+                           (parse-result : _ (cairli--parse-args-loop merged-app (concat pre-args rest) initial-state))
+                        (match parse-result
+                          (Err e) (Err e)
+                          (Ok ctx) (Ok (map-set ctx "subcommand" sc-path))))))))))))
+
+;; Scan args for the subcommand token, collecting global flags encountered before it
+(defn cairli--scan-for-subcommand
+  :sig [(app : _) (args : List) (subcmds : List) (global-flags : List) (pre-args : List) (depth : i64) -> _]
+  :requires [(valid app)]
+  :ensures [(valid result)]
+  :body (if (empty? args)
+          (Err (str "missing command. Available: " (join (map (fn [sc] (map-get sc "name")) subcmds) ", ")))
+          (let (arg : String (head args))
+               (rest : List (tail args))
+            (if (or (= arg "--help") (= arg "-h"))
+              (cairli--print-help app)
+              (if (or (= arg "--version") (= arg "-V"))
+                (cairli--print-version app)
+                (if (starts-with arg "-")
+                  (let (flag-def : _ (if (if (starts-with arg "--") (> (char-count arg) 2) false)
+                                       (cairli--find-flag-by-long global-flags (substring arg 2 (char-count arg)))
+                                       (if (= (char-count arg) 2)
+                                         (cairli--find-flag-by-short global-flags (substring arg 1 2))
+                                         nil)))
+                    (if (= flag-def nil)
+                      (Err (str "unknown flag: " arg))
+                      (if (= (map-get-or flag-def "type" "string") "bool")
+                        (cairli--scan-for-subcommand app rest subcmds global-flags (append pre-args arg) depth)
+                        (if (empty? rest)
+                          (Err (str "flag " arg " requires a value"))
+                          (cairli--scan-for-subcommand app (tail rest) subcmds global-flags
+                            (append (append pre-args arg) (head rest)) depth)))))
+                  (let (matched : _ (cairli--find-subcommand subcmds arg))
+                    (if (= matched nil)
+                      (Err (str "unknown command: " arg ". Available: " (join (map (fn [sc] (map-get sc "name")) subcmds) ", ")))
+                      (let (nested : List (map-get-or matched "subcommands" []))
+                           (has-nested : Bool (not (empty? nested)))
+                           (sc-path : String arg)
+                        (if has-nested
+                          (cairli--resolve-nested-subcommand app matched sc-path global-flags (concat pre-args rest) [])
+                          (let (merged-flags : List (concat (map-get matched "flags") global-flags))
+                               (merged-app : _ (map-from ["name" (map-get app "name")
+                                                          "version" (map-get-or app "version" "")
+                                                          "flags" merged-flags
+                                                          "positionals" (map-get matched "positionals")
+                                                          "subcommands" []
+                                                          "description" (map-get-or matched "help" "")]))
+                               (all-args : List (concat pre-args rest))
+                               (initial-flags : _ (cairli--apply-defaults merged-flags))
+                               (initial-state : _ (map-from ["flags" initial-flags
+                                                             "positionals" (map-new)
+                                                             "pos-index" 0]))
+                               (parse-result : _ (cairli--parse-args-loop merged-app all-args initial-state))
+                            (match parse-result
+                              (Err e) (Err e)
+                              (Ok ctx) (Ok (map-set ctx "subcommand" sc-path))))))))))))))
+
+;; Entry point for subcommand-aware parsing
+(defn cairli--parse-with-subcommands
+  :sig [(app : _) (args : List) -> _]
+  :requires [(valid app)]
+  :ensures [(valid result)]
+  :body (let (subcmds : List (map-get-or app "subcommands" []))
+              (global-flags : List (map-get app "flags"))
+           (cairli--scan-for-subcommand app args subcmds global-flags [] 0)))
+
+;; ── Public API ───────────────────────────────────────────────
+
+;; Main entry point. Parses args, returns (Ok context) or (Err message).
+;; raw-args should be (get-args) — first element is program name and is skipped.
+(defn cairli-run
+  :sig [(app : _) (raw-args : List) -> _]
+  :requires [(map-has app "name") (map-has app "flags") (map-has app "positionals")]
+  :ensures [(valid result)]
+  :body (let (args : List (if (empty? raw-args) [] (tail raw-args)))
+              (has-subcmds : Bool (not (empty? (map-get-or app "subcommands" []))))
+           (if has-subcmds
+             (cairli--parse-with-subcommands app args)
+             (let (initial-flags : _ (cairli--apply-defaults (map-get app "flags")))
+                  (initial-state : _ (map-from ["flags" initial-flags
+                                                "positionals" (map-new)
+                                                "pos-index" 0]))
+               (cairli--parse-args-loop app args initial-state)))))
+
+;; Get a flag value from parsed context
+(defn cairli-flag
+  :sig [(ctx : _) (name : String) -> _]
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body (map-get (map-get ctx "flags") name))
+
+;; Get a positional value from parsed context
+(defn cairli-positional
+  :sig [(ctx : _) (name : String) -> _]
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body (map-get (map-get ctx "positionals") name))
+
+;; Get the matched subcommand path from parsed context
+(defn cairli-subcommand
+  :sig [(ctx : _) -> _]
+  :requires [(valid ctx)]
+  :ensures [(valid result)]
+  :body (map-get-or ctx "subcommand" nil))
+
+;; Convenience: run and handle errors with print + exit 1
+(defn cairli-run-or-die
+  :sig [(app : _) (raw-args : List) -> _]
+  :requires [(map-has app "name")]
+  :ensures [(valid result)]
+  :body (match (cairli-run app raw-args)
+          (Ok ctx) ctx
+          (Err msg) (do
+            (print (str "error: " msg "\n"))
+            (print (str "Try '" (map-get app "name") " --help' for more information.\n"))
+            (exit 1))))

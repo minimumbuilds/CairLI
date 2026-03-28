@@ -1,0 +1,25 @@
+;; greeter — CairLI example tool
+;;
+;; Compile: g3 -- src/cairli.airl examples/greeter.airl -o greeter
+;; Run:     ./greeter [OPTIONS] <name>
+
+(let (app : _ (cairli-app (map-from ["name" "greeter"
+                                      "version" "1.0.0"
+                                      "description" "A friendly greeting tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "shout" "short" "s" "type" "bool"
+                                               "help" "Shout the greeting"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "greeting" "short" "g"
+                                               "default" "Hello"
+                                               "help" "Custom greeting word"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "times" "short" "n" "type" "int"
+                                               "default" "1"
+                                               "help" "Number of times to greet"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "name" "help" "Who to greet"])))
+     (ctx : _ (cairli-run-or-die app (get-args)))
+  (let (name : String (cairli-positional ctx "name"))
+       (greeting : String (cairli-flag ctx "greeting"))
+       (shout : _ (cairli-flag ctx "shout"))
+       (times : i64 (cairli-flag ctx "times"))
+       (msg : String (str greeting ", " name "!"))
+       (final-msg : String (if shout (to-upper msg) msg))
+    (fold (fn [_ i] (print (str final-msg "\n"))) nil (range 0 times))))

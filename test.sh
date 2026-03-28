@@ -52,6 +52,12 @@ compile /tmp/cairli-test-nested "$SCRIPT_DIR/src/cairli.airl" "$SCRIPT_DIR/tests
 rm -f /tmp/cairli-test-nested
 echo ""
 
+echo "── Comprehensive subcommand tests ──"
+compile /tmp/cairli-test-sub-comp "$SCRIPT_DIR/src/cairli.airl" "$SCRIPT_DIR/tests/test-subcommands-comprehensive.airl"
+/tmp/cairli-test-sub-comp
+rm -f /tmp/cairli-test-sub-comp
+echo ""
+
 echo "── Subcommand help tests ──"
 compile /tmp/cairli-test-subhelp "$SCRIPT_DIR/src/cairli.airl" "$SCRIPT_DIR/tests/test-subcommand-help.airl"
 /tmp/cairli-test-subhelp

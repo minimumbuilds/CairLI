@@ -1,0 +1,494 @@
+;; ══════════════════════════════════════════════════════════════
+;; CairLI — Comprehensive Subcommand Tests
+;; Covers edge cases, error paths, flag interactions, ordering,
+;; nested scenarios, and realistic multi-subcommand apps.
+;; Each section includes at least one expected-failure test.
+;; ══════════════════════════════════════════════════════════════
+
+(defn check
+  :sig [(cond : Bool) (msg : String) -> _]
+  :requires [(valid msg)]
+  :ensures [(valid result)]
+  :body (if cond nil (do (print (str "FAIL: " msg "\n")) (exit 1))))
+
+;; ── Section 1: Subcommand Flag Defaults & Types ─────────────
+
+;; 1.1 Subcommand flag defaults applied
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "port" "type" "int" "default" "8080"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "host" "default" "localhost"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "tls" "type" "bool"])))
+     (result : _ (cairli-run app ["tool" "serve"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "port") 8080) "port default 8080")
+      (check (= (cairli-flag ctx "host") "localhost") "host default localhost")
+      (check (= (cairli-flag ctx "tls") false) "bool default false")
+      (print "PASS: 1.1 subcommand flag defaults\n"))
+    (Err e) (do (print (str "FAIL: 1.1: " e "\n")) (exit 1))))
+
+;; 1.2 EXPECTED FAIL: bad int on subcommand flag
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "port" "type" "int"])))
+     (result : _ (cairli-run app ["tool" "serve" "--port" "notanumber"]))
+  (match result
+    (Ok _) (do (print "FAIL: 1.2 should error for bad int\n") (exit 1))
+    (Err e) (do
+      (check (contains e "invalid integer") "error mentions invalid integer")
+      (print "PASS: 1.2 bad int on subcommand flag\n"))))
+
+;; 1.3 EXPECTED FAIL: missing value for subcommand flag
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "port" "type" "int"])))
+     (result : _ (cairli-run app ["tool" "serve" "--port"]))
+  (match result
+    (Ok _) (do (print "FAIL: 1.3 should error for missing value\n") (exit 1))
+    (Err e) (do
+      (check (contains e "requires a value") "error mentions requires value")
+      (print "PASS: 1.3 missing value for subcommand flag\n"))))
+
+;; 1.4 EXPECTED FAIL: unknown flag within subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "port" "type" "int"])))
+     (result : _ (cairli-run app ["tool" "serve" "--bogus"]))
+  (match result
+    (Ok _) (do (print "FAIL: 1.4 should error for unknown flag in subcmd\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unknown flag") "error mentions unknown flag")
+      (check (contains e "bogus") "error includes flag name")
+      (print "PASS: 1.4 unknown flag within subcommand\n"))))
+
+;; ── Section 2: Global + Subcommand Flag Interaction ──────────
+
+;; 2.1 Global flag after subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "short" "v" "type" "bool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run"])))
+     (app : _ (cairli-subcommand-flag app "run" (map-from ["name" "count" "type" "int" "default" "1"])))
+     (result : _ (cairli-run app ["tool" "run" "--count" "5" "--verbose"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") true) "global flag after subcmd")
+      (check (= (cairli-flag ctx "count") 5) "subcmd flag value")
+      (print "PASS: 2.1 global flag after subcommand\n"))
+    (Err e) (do (print (str "FAIL: 2.1: " e "\n")) (exit 1))))
+
+;; 2.2 Global value flag before subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "config" "short" "c" "default" "default.cfg"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run"])))
+     (result : _ (cairli-run app ["tool" "--config" "prod.cfg" "run"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "config") "prod.cfg") "global value flag before subcmd")
+      (check (= (cairli-subcommand ctx) "run") "subcommand still parsed")
+      (print "PASS: 2.2 global value flag before subcommand\n"))
+    (Err e) (do (print (str "FAIL: 2.2: " e "\n")) (exit 1))))
+
+;; 2.3 Short global flag before subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "short" "v" "type" "bool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "build"])))
+     (result : _ (cairli-run app ["tool" "-v" "build"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") true) "short global before subcmd")
+      (check (= (cairli-subcommand ctx) "build") "subcmd parsed")
+      (print "PASS: 2.3 short global flag before subcommand\n"))
+    (Err e) (do (print (str "FAIL: 2.3: " e "\n")) (exit 1))))
+
+;; 2.4 EXPECTED FAIL: unknown flag before subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run"])))
+     (result : _ (cairli-run app ["tool" "--unknown-global" "run"]))
+  (match result
+    (Ok _) (do (print "FAIL: 2.4 should error for unknown flag before subcmd\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unknown flag") "error mentions unknown flag")
+      (print "PASS: 2.4 unknown flag before subcommand\n"))))
+
+;; 2.5 Interleaved global and subcommand flags
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "log-level" "default" "info"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "port" "type" "int" "default" "80"])))
+     (result : _ (cairli-run app ["tool" "serve" "--verbose" "--port" "3000" "--log-level" "debug"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "verbose") true) "global bool interleaved")
+      (check (= (cairli-flag ctx "port") 3000) "subcmd int interleaved")
+      (check (= (cairli-flag ctx "log-level") "debug") "global string interleaved")
+      (print "PASS: 2.5 interleaved global and subcommand flags\n"))
+    (Err e) (do (print (str "FAIL: 2.5: " e "\n")) (exit 1))))
+
+;; ── Section 3: Subcommand Positional Args ────────────────────
+
+;; 3.1 Subcommand with required positional
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "open"])))
+     (app : _ (cairli-subcommand-positional app "open" (map-from ["name" "file" "help" "File to open"])))
+     (result : _ (cairli-run app ["tool" "open" "test.txt"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "file") "test.txt") "positional parsed")
+      (print "PASS: 3.1 subcommand with required positional\n"))
+    (Err e) (do (print (str "FAIL: 3.1: " e "\n")) (exit 1))))
+
+;; 3.2 EXPECTED FAIL: missing required positional in subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "open"])))
+     (app : _ (cairli-subcommand-positional app "open" (map-from ["name" "file"])))
+     (result : _ (cairli-run app ["tool" "open"]))
+  (match result
+    (Ok _) (do (print "FAIL: 3.2 should error for missing positional\n") (exit 1))
+    (Err e) (do
+      (check (contains e "missing required argument") "error mentions missing")
+      (check (contains e "file") "error mentions file")
+      (print "PASS: 3.2 missing required positional in subcommand\n"))))
+
+;; 3.3 Multiple positionals in subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "copy"])))
+     (app : _ (cairli-subcommand-positional app "copy" (map-from ["name" "src"])))
+     (app : _ (cairli-subcommand-positional app "copy" (map-from ["name" "dst"])))
+     (result : _ (cairli-run app ["tool" "copy" "a.txt" "b.txt"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "src") "a.txt") "src positional")
+      (check (= (cairli-positional ctx "dst") "b.txt") "dst positional")
+      (print "PASS: 3.3 multiple positionals in subcommand\n"))
+    (Err e) (do (print (str "FAIL: 3.3: " e "\n")) (exit 1))))
+
+;; 3.4 EXPECTED FAIL: extra positional in subcommand
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "open"])))
+     (app : _ (cairli-subcommand-positional app "open" (map-from ["name" "file"])))
+     (result : _ (cairli-run app ["tool" "open" "a.txt" "b.txt"]))
+  (match result
+    (Ok _) (do (print "FAIL: 3.4 should error for extra positional\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unexpected argument") "error mentions unexpected")
+      (print "PASS: 3.4 extra positional in subcommand\n"))))
+
+;; 3.5 Subcommand positional interleaved with flags
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run"])))
+     (app : _ (cairli-subcommand-flag app "run" (map-from ["name" "timeout" "type" "int" "default" "30"])))
+     (app : _ (cairli-subcommand-positional app "run" (map-from ["name" "script"])))
+     (app : _ (cairli-subcommand-positional app "run" (map-from ["name" "env" "required" false])))
+     (result : _ (cairli-run app ["tool" "run" "deploy.sh" "--timeout" "60" "production"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-positional ctx "script") "deploy.sh") "first positional")
+      (check (= (cairli-flag ctx "timeout") 60) "flag between positionals")
+      (check (= (cairli-positional ctx "env") "production") "second positional")
+      (print "PASS: 3.5 positional interleaved with flags\n"))
+    (Err e) (do (print (str "FAIL: 3.5: " e "\n")) (exit 1))))
+
+;; ── Section 4: Multiple Subcommands ──────────────────────────
+
+;; 4.1 Dispatch to correct subcommand among many
+(let (app : _ (cairli-app (map-from ["name" "git"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "commit" "help" "Commit changes"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "push" "help" "Push to remote"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "pull" "help" "Pull from remote"])))
+     (app : _ (cairli-subcommand-flag app "commit" (map-from ["name" "message" "short" "m"])))
+     (app : _ (cairli-subcommand-flag app "push" (map-from ["name" "force" "type" "bool"])))
+     (result : _ (cairli-run app ["git" "push" "--force"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "push") "dispatched to push")
+      (check (= (cairli-flag ctx "force") true) "push flag parsed")
+      (print "PASS: 4.1 dispatch correct subcommand\n"))
+    (Err e) (do (print (str "FAIL: 4.1: " e "\n")) (exit 1))))
+
+;; 4.2 Different subcommands have isolated flags
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "alpha"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "beta"])))
+     (app : _ (cairli-subcommand-flag app "alpha" (map-from ["name" "alpha-flag" "type" "bool"])))
+     (app : _ (cairli-subcommand-flag app "beta" (map-from ["name" "beta-flag" "type" "bool"])))
+     (result : _ (cairli-run app ["tool" "alpha" "--beta-flag"]))
+  (match result
+    (Ok _) (do (print "FAIL: 4.2 alpha shouldn't accept beta-flag\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unknown flag") "flags are isolated")
+      (print "PASS: 4.2 subcommand flags are isolated\n"))))
+
+;; 4.3 EXPECTED FAIL: error message lists available subcommands
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "build"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "test"])))
+     (result : _ (cairli-run app ["tool" "deploy"]))
+  (match result
+    (Ok _) (do (print "FAIL: 4.3 deploy not registered\n") (exit 1))
+    (Err e) (do
+      (check (contains e "serve") "error lists serve")
+      (check (contains e "build") "error lists build")
+      (check (contains e "test") "error lists test")
+      (print "PASS: 4.3 error lists available subcommands\n"))))
+
+;; ── Section 5: Nested Subcommands Comprehensive ──────────────
+
+;; 5.1 Nested subcommand with own flags
+(let (app : _ (cairli-app (map-from ["name" "cli"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "db"])))
+     (app : _ (cairli-add-nested-subcommand app "db" (map-from ["name" "migrate"])))
+     (result : _ (cairli-run app ["cli" "db" "migrate" "--verbose"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "db migrate") "nested path")
+      (check (= (cairli-flag ctx "verbose") true) "global flag in nested")
+      (print "PASS: 5.1 nested subcommand with global flag\n"))
+    (Err e) (do (print (str "FAIL: 5.1: " e "\n")) (exit 1))))
+
+;; 5.2 Nested subcommand with positionals
+(let (app : _ (cairli-app (map-from ["name" "cli"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "topic"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "create"])))
+     ;; Can't use cairli-subcommand-positional on a nested subcommand directly via the builder API,
+     ;; but the nested subcommand's positionals are set by the builder.
+     ;; For now, test that the nested dispatch works without positionals.
+     (result : _ (cairli-run app ["cli" "topic" "create"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "topic create") "nested parsed")
+      (print "PASS: 5.2 nested subcommand basic dispatch\n"))
+    (Err e) (do (print (str "FAIL: 5.2: " e "\n")) (exit 1))))
+
+;; 5.3 EXPECTED FAIL: wrong nested subcommand name
+(let (app : _ (cairli-app (map-from ["name" "cli"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "topic"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "create"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "delete"])))
+     (result : _ (cairli-run app ["cli" "topic" "update"]))
+  (match result
+    (Ok _) (do (print "FAIL: 5.3 update not registered\n") (exit 1))
+    (Err e) (do
+      (check (contains e "unknown command") "error says unknown")
+      (check (contains e "update") "error includes update")
+      (check (contains e "create") "error lists create")
+      (check (contains e "delete") "error lists delete")
+      (print "PASS: 5.3 unknown nested subcommand lists available\n"))))
+
+;; 5.4 EXPECTED FAIL: nested subcommand requires child command
+(let (app : _ (cairli-app (map-from ["name" "cli"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "topic"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "list"])))
+     (result : _ (cairli-run app ["cli" "topic"]))
+  (match result
+    (Ok _) (do (print "FAIL: 5.4 should require nested subcommand\n") (exit 1))
+    (Err e) (do
+      (check (contains e "missing subcommand") "error mentions missing")
+      (check (contains e "list") "error lists available nested")
+      (print "PASS: 5.4 nested subcommand required\n"))))
+
+;; 5.5 Multiple parent subcommands with different nesting
+(let (app : _ (cairli-app (map-from ["name" "cli"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "topic"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "group"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "list"])))
+     (app : _ (cairli-add-nested-subcommand app "group" (map-from ["name" "list"])))
+     (result1 : _ (cairli-run app ["cli" "topic" "list"]))
+     (result2 : _ (cairli-run app ["cli" "group" "list"]))
+  (do
+    (match result1
+      (Ok ctx) (check (= (cairli-subcommand ctx) "topic list") "topic list path")
+      (Err e) (do (print (str "FAIL: 5.5a: " e "\n")) (exit 1)))
+    (match result2
+      (Ok ctx) (check (= (cairli-subcommand ctx) "group list") "group list path")
+      (Err e) (do (print (str "FAIL: 5.5b: " e "\n")) (exit 1)))
+    (print "PASS: 5.5 different parents with same nested name\n")))
+
+;; ── Section 6: Edge Cases ────────────────────────────────────
+
+;; 6.1 Subcommand with no flags or positionals
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "status" "help" "Show status"])))
+     (result : _ (cairli-run app ["tool" "status"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "status") "bare subcommand")
+      (print "PASS: 6.1 subcommand with no flags or positionals\n"))
+    (Err e) (do (print (str "FAIL: 6.1: " e "\n")) (exit 1))))
+
+;; 6.2 cairli-subcommand returns nil for flat apps
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
+     (app : _ (cairli-add-positional app (map-from ["name" "file" "required" false])))
+     (result : _ (cairli-run app ["tool"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) nil) "no subcommand for flat app")
+      (print "PASS: 6.2 cairli-subcommand nil for flat app\n"))
+    (Err e) (do (print (str "FAIL: 6.2: " e "\n")) (exit 1))))
+
+;; 6.3 Duplicate subcommand flag overwrite (last wins)
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run"])))
+     (app : _ (cairli-subcommand-flag app "run" (map-from ["name" "env" "default" "dev"])))
+     (result : _ (cairli-run app ["tool" "run" "--env" "staging" "--env" "prod"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "env") "prod") "last flag wins")
+      (print "PASS: 6.3 duplicate subcommand flag last wins\n"))
+    (Err e) (do (print (str "FAIL: 6.3: " e "\n")) (exit 1))))
+
+;; 6.4 Empty string as subcommand flag value
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run"])))
+     (app : _ (cairli-subcommand-flag app "run" (map-from ["name" "prefix"])))
+     (result : _ (cairli-run app ["tool" "run" "--prefix" ""]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "prefix") "") "empty string value")
+      (print "PASS: 6.4 empty string subcommand flag value\n"))
+    (Err e) (do (print (str "FAIL: 6.4: " e "\n")) (exit 1))))
+
+;; 6.5 EXPECTED FAIL: global flag value consumed as subcommand name
+;; This tests that a value flag before subcmd properly consumes the next arg
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "config"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "run"])))
+     ;; --config eats "run" as its value, leaving nothing for subcommand
+     (result : _ (cairli-run app ["tool" "--config" "run"]))
+  (match result
+    (Ok _) (do (print "FAIL: 6.5 should error — run consumed as config value\n") (exit 1))
+    (Err e) (do
+      (check (contains e "command") "error mentions command")
+      (print "PASS: 6.5 global value flag consumes subcommand name\n"))))
+
+;; 6.6 Short flag on subcommand-specific flag
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (app : _ (cairli-subcommand-flag app "serve" (map-from ["name" "port" "short" "p" "type" "int" "default" "80"])))
+     (result : _ (cairli-run app ["tool" "serve" "-p" "9090"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-flag ctx "port") 9090) "short subcmd flag")
+      (print "PASS: 6.6 short flag on subcommand flag\n"))
+    (Err e) (do (print (str "FAIL: 6.6: " e "\n")) (exit 1))))
+
+;; ── Section 7: Realistic Scenario ────────────────────────────
+
+;; 7.1 Kafka-CLI style: produce with all options
+(let (app : _ (cairli-app (map-from ["name" "kafka-cli" "version" "0.1.0" "description" "Kafka CLI"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "broker" "short" "b" "default" "localhost:9092" "help" "Broker address"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "short" "v" "type" "bool" "help" "Verbose output"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "produce" "help" "Produce messages"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "consume" "help" "Consume messages"])))
+     (app : _ (cairli-subcommand-flag app "produce" (map-from ["name" "topic" "short" "t" "help" "Topic name"])))
+     (app : _ (cairli-subcommand-flag app "produce" (map-from ["name" "key" "short" "k" "help" "Message key"])))
+     (app : _ (cairli-subcommand-positional app "produce" (map-from ["name" "message" "help" "Message body"])))
+     (app : _ (cairli-subcommand-flag app "consume" (map-from ["name" "topic" "short" "t" "help" "Topic name"])))
+     (app : _ (cairli-subcommand-flag app "consume" (map-from ["name" "group" "short" "g" "help" "Consumer group"])))
+     (app : _ (cairli-subcommand-flag app "consume" (map-from ["name" "count" "type" "int" "default" "10" "help" "Messages"])))
+     (result : _ (cairli-run app ["kafka-cli" "-b" "kafka.prod:9092" "produce" "-t" "orders" "--key" "order-123" "hello world"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "produce") "produce subcommand")
+      (check (= (cairli-flag ctx "broker") "kafka.prod:9092") "global broker override")
+      (check (= (cairli-flag ctx "topic") "orders") "subcmd topic flag")
+      (check (= (cairli-flag ctx "key") "order-123") "subcmd key flag")
+      (check (= (cairli-positional ctx "message") "hello world") "positional message")
+      (check (= (cairli-flag ctx "verbose") false) "verbose default")
+      (print "PASS: 7.1 kafka-cli produce scenario\n"))
+    (Err e) (do (print (str "FAIL: 7.1: " e "\n")) (exit 1))))
+
+;; 7.2 Kafka-CLI style: consume
+(let (app : _ (cairli-app (map-from ["name" "kafka-cli"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "broker" "default" "localhost:9092"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "consume"])))
+     (app : _ (cairli-subcommand-flag app "consume" (map-from ["name" "topic" "short" "t"])))
+     (app : _ (cairli-subcommand-flag app "consume" (map-from ["name" "group" "short" "g" "default" "default-group"])))
+     (app : _ (cairli-subcommand-flag app "consume" (map-from ["name" "count" "type" "int" "default" "10"])))
+     (result : _ (cairli-run app ["kafka-cli" "consume" "-t" "orders" "--count" "100"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "consume") "consume subcommand")
+      (check (= (cairli-flag ctx "topic") "orders") "topic")
+      (check (= (cairli-flag ctx "group") "default-group") "group default")
+      (check (= (cairli-flag ctx "count") 100) "count override")
+      (check (= (cairli-flag ctx "broker") "localhost:9092") "broker default")
+      (print "PASS: 7.2 kafka-cli consume scenario\n"))
+    (Err e) (do (print (str "FAIL: 7.2: " e "\n")) (exit 1))))
+
+;; 7.3 EXPECTED FAIL: kafka-cli with no subcommand
+(let (app : _ (cairli-app (map-from ["name" "kafka-cli"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "broker" "default" "localhost:9092"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "produce"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "consume"])))
+     (result : _ (cairli-run app ["kafka-cli" "--broker" "kafka:9092"]))
+  (match result
+    (Ok _) (do (print "FAIL: 7.3 should error for no subcommand\n") (exit 1))
+    (Err e) (do
+      (check (contains e "command") "error mentions command")
+      (check (contains e "produce") "error lists produce")
+      (check (contains e "consume") "error lists consume")
+      (print "PASS: 7.3 kafka-cli no subcommand error lists available\n"))))
+
+;; 7.4 Nested: topic create with partitions
+(let (app : _ (cairli-app (map-from ["name" "kafka-cli"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "broker" "default" "localhost:9092"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "topic" "help" "Topic management"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "create" "help" "Create topic"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "delete" "help" "Delete topic"])))
+     (app : _ (cairli-add-nested-subcommand app "topic" (map-from ["name" "list" "help" "List topics"])))
+     (result : _ (cairli-run app ["kafka-cli" "--broker" "kafka:9092" "topic" "create"]))
+  (match result
+    (Ok ctx) (do
+      (check (= (cairli-subcommand ctx) "topic create") "topic create path")
+      (check (= (cairli-flag ctx "broker") "kafka:9092") "broker override")
+      (print "PASS: 7.4 nested topic create\n"))
+    (Err e) (do (print (str "FAIL: 7.4: " e "\n")) (exit 1))))
+
+;; ── Section 8: Error Message Quality ─────────────────────────
+
+;; 8.1 EXPECTED FAIL: missing subcommand error includes "Available:"
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "alpha"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "beta"])))
+     (result : _ (cairli-run app ["tool"]))
+  (match result
+    (Ok _) (do (print "FAIL: 8.1\n") (exit 1))
+    (Err e) (do
+      (check (contains e "alpha") "lists alpha")
+      (check (contains e "beta") "lists beta")
+      (print "PASS: 8.1 missing subcommand lists all available\n"))))
+
+;; 8.2 EXPECTED FAIL: unknown subcommand includes the bad name
+(let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "serve"])))
+     (result : _ (cairli-run app ["tool" "svere"]))
+  (match result
+    (Ok _) (do (print "FAIL: 8.2\n") (exit 1))
+    (Err e) (do
+      (check (contains e "svere") "error includes typo")
+      (check (contains e "serve") "error lists correct option")
+      (print "PASS: 8.2 unknown subcommand error quality\n"))))
+
+;; 8.3 EXPECTED FAIL: missing nested error includes parent path
+(let (app : _ (cairli-app (map-from ["name" "cli"])))
+     (app : _ (cairli-add-subcommand app (map-from ["name" "remote"])))
+     (app : _ (cairli-add-nested-subcommand app "remote" (map-from ["name" "add"])))
+     (app : _ (cairli-add-nested-subcommand app "remote" (map-from ["name" "remove"])))
+     (result : _ (cairli-run app ["cli" "remote"]))
+  (match result
+    (Ok _) (do (print "FAIL: 8.3\n") (exit 1))
+    (Err e) (do
+      (check (contains e "remote") "mentions parent")
+      (check (contains e "add") "lists add")
+      (check (contains e "remove") "lists remove")
+      (print "PASS: 8.3 missing nested error quality\n"))))
+
+;; ── Summary ──────────────────────────────────────────────────
+
+(print "\nAll comprehensive subcommand tests passed!\n")

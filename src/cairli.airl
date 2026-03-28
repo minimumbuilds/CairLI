@@ -663,13 +663,15 @@
   :ensures [(valid result)]
   :body (let (args : List (if (empty? raw-args) [] (tail raw-args)))
               (has-subcmds : Bool (not (empty? (map-get-or app "subcommands" []))))
-           (if has-subcmds
-             (cairli--parse-with-subcommands app args)
-             (let (initial-flags : _ (cairli--apply-defaults (map-get app "flags")))
-                  (initial-state : _ (map-from ["flags" initial-flags
-                                                "positionals" (map-new)
-                                                "pos-index" 0]))
-               (cairli--parse-args-loop app args initial-state)))))
+           (if (empty? args)
+             (cairli--print-help app)
+             (if has-subcmds
+               (cairli--parse-with-subcommands app args)
+               (let (initial-flags : _ (cairli--apply-defaults (map-get app "flags")))
+                    (initial-state : _ (map-from ["flags" initial-flags
+                                                  "positionals" (map-new)
+                                                  "pos-index" 0]))
+                 (cairli--parse-args-loop app args initial-state))))))
 
 ;; Get a flag value from parsed context
 (defn cairli-flag

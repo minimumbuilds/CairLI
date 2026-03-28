@@ -201,14 +201,17 @@
 
 ;; ── Section 6: Edge Cases ────────────────────────────────────
 
-;; 6.1 Completely empty raw-args list
+;; 6.1 Empty args now shows help (exits 0) — cannot test via Result.
+;; Test with a flag arg instead to exercise the optional-positional path.
 (let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "dry-run" "type" "bool"])))
      (app : _ (cairli-add-positional app (map-from ["name" "file" "required" false])))
-     (result : _ (cairli-run app []))
+     (result : _ (cairli-run app ["tool" "--dry-run"]))
   (match result
     (Ok ctx) (do
-      (check (= (cairli-positional ctx "file") nil) "no positional from empty args")
-      (print "PASS: 6.1 empty raw-args\n"))
+      (check (= (cairli-positional ctx "file") nil) "no positional when only flag given")
+      (check (= (cairli-flag ctx "dry-run") true) "flag parsed")
+      (print "PASS: 6.1 optional positional with flag only\n"))
     (Err e) (do (print (str "FAIL: 6.1: " e "\n")) (exit 1))))
 
 ;; 6.2 Flags-only app (no positionals)
@@ -223,11 +226,13 @@
       (print "PASS: 6.2 flags-only app\n"))
     (Err e) (do (print (str "FAIL: 6.2: " e "\n")) (exit 1))))
 
-;; 6.3 No flags, no positionals (bare app)
+;; 6.3 No args shows help (exits 0) — cannot test via Result.
+;; Test bare app with a dummy arg instead.
 (let (app : _ (cairli-app (map-from ["name" "tool"])))
-     (result : _ (cairli-run app ["tool"]))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "something"]))
   (match result
-    (Ok _) (print "PASS: 6.3 bare app\n")
+    (Ok _) (print "PASS: 6.3 bare app with arg\n")
     (Err e) (do (print (str "FAIL: 6.3: " e "\n")) (exit 1))))
 
 ;; 6.4 Empty string as flag value
@@ -301,7 +306,8 @@
 ;; 7.1 cairli-flag for missing key returns nil
 (let (app : _ (cairli-app (map-from ["name" "tool"])))
      (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
-     (result : _ (cairli-run app ["tool"]))
+     (app : _ (cairli-add-positional app (map-from ["name" "x" "required" false])))
+     (result : _ (cairli-run app ["tool" "dummy"]))
   (match result
     (Ok ctx) (do
       (check (= (cairli-flag ctx "nonexistent") nil) "missing flag = nil")
@@ -310,11 +316,13 @@
 
 ;; 7.2 cairli-positional for missing key returns nil
 (let (app : _ (cairli-app (map-from ["name" "tool"])))
-     (app : _ (cairli-add-positional app (map-from ["name" "file" "required" false])))
-     (result : _ (cairli-run app ["tool"]))
+     (app : _ (cairli-add-positional app (map-from ["name" "a" "required" false])))
+     (app : _ (cairli-add-positional app (map-from ["name" "b" "required" false])))
+     (result : _ (cairli-run app ["tool" "only-a"]))
   (match result
     (Ok ctx) (do
-      (check (= (cairli-positional ctx "file") nil) "omitted optional = nil")
+      (check (= (cairli-positional ctx "a") "only-a") "first positional set")
+      (check (= (cairli-positional ctx "b") nil) "omitted optional = nil")
       (check (= (cairli-positional ctx "nonexistent") nil) "nonexistent pos = nil")
       (print "PASS: 7.2 missing positional returns nil\n"))
     (Err e) (do (print (str "FAIL: 7.2: " e "\n")) (exit 1))))
@@ -337,10 +345,11 @@
       (print "PASS: 8.2 required flag provided\n"))
     (Err e) (do (print (str "FAIL: 8.2: " e "\n")) (exit 1))))
 
-;; 8.3 Positional with explicit required=false
+;; 8.3 Positional with explicit required=false (pass a flag so args aren't empty)
 (let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
      (app : _ (cairli-add-positional app (map-from ["name" "file" "required" false])))
-     (result : _ (cairli-run app ["tool"]))
+     (result : _ (cairli-run app ["tool" "--verbose"]))
   (match result
     (Ok ctx) (do
       (check (= (cairli-positional ctx "file") nil) "optional positional not set")
@@ -436,8 +445,9 @@
 
 ;; 10.4 Missing positional includes positional name in error
 (let (app : _ (cairli-app (map-from ["name" "tool"])))
+     (app : _ (cairli-add-flag app (map-from ["name" "verbose" "type" "bool"])))
      (app : _ (cairli-add-positional app (map-from ["name" "input-file"])))
-     (result : _ (cairli-run app ["tool"]))
+     (result : _ (cairli-run app ["tool" "--verbose"]))
   (match result
     (Ok _) (do (print "FAIL: 10.4\n") (exit 1))
     (Err e) (do

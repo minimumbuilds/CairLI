@@ -6,13 +6,13 @@ AIRL_DIR="${AIRL_DIR:-/mnt/b6d8b397-9fc1-42ac-a0da-8664a73d4ee9/AIRL}"
 G3="${G3:-$AIRL_DIR/g3}"
 export AIRL_STDLIB="${AIRL_STDLIB:-$AIRL_DIR/stdlib}"
 
+# g3 requires CWD to be the AIRL directory to find libairl_rt.a
 # g3 may emit non-fatal runtime errors during compilation but still produce a working binary.
-# We check for the output binary instead of relying on exit code.
 compile() {
   local output="$1"
   shift
   rm -f "$output"
-  $G3 -- "$@" -o "$output" 2>&1 || true
+  (cd "$AIRL_DIR" && $G3 -- "$@" -o "$output") 2>&1 || true
   if [ ! -f "$output" ]; then
     echo "COMPILE FAILED: $output not produced"
     exit 1

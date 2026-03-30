@@ -6,7 +6,7 @@ CairLI is a CLI argument parsing framework written in pure AIRL. Builder pattern
 
 ## Pre-Flight (BLOCKING)
 
-Before writing any `.airl` file, you MUST read `/mnt/b6d8b397-9fc1-42ac-a0da-8664a73d4ee9/AIRL/AIRL-Header.md`.
+Before writing any `.airl` file, you MUST read `../AIRL/AIRL-Header.md`.
 
 ## Build & Test
 
@@ -14,7 +14,7 @@ CairLI is pure AIRL. Use **g3 exclusively** — never cargo, never modify the AI
 
 ```bash
 # Set up
-export AIRL_DIR=/mnt/b6d8b397-9fc1-42ac-a0da-8664a73d4ee9/AIRL
+export AIRL_DIR=../AIRL
 export AIRL_STDLIB=$AIRL_DIR/stdlib
 G3=$AIRL_DIR/g3
 

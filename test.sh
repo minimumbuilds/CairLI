@@ -2,7 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-AIRL_DIR="${AIRL_DIR:-/mnt/b6d8b397-9fc1-42ac-a0da-8664a73d4ee9/AIRL}"
+AIRL_DIR="${AIRL_DIR:-$SCRIPT_DIR/../AIRL}"
 G3="${G3:-$AIRL_DIR/g3}"
 export AIRL_STDLIB="${AIRL_STDLIB:-$AIRL_DIR/stdlib}"
 

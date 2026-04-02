@@ -29,7 +29,7 @@ bash test.sh
 ## g3 Quirks
 
 - **No `assert` with `print`:** g3 compiles `assert` to use 2-arg `print` internally. If you also use single-arg `print`, you get a verifier error. Use a custom `check` function instead.
-- **`string-to-int` returns `(Ok n)`:** In g3's AOT, `string-to-int` returns a Result, not a bare int. Use `match` to unwrap.
+- **`string-to-int` returns `(Ok n)`:** In g3, `string-to-int` returns a Result, not a bare int. Use `match` to unwrap.
 - **`print` not `println`:** Use `(print (str ... "\n"))` for output. Avoid variadic `println` — g3 has arity mismatch issues with variadic builtins used at different arities.
 - **Single-arg `print` only:** Always wrap in `(str ...)` to produce a single string argument.
 

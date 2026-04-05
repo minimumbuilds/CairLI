@@ -6,7 +6,7 @@ CairLI is a CLI argument parsing framework written in pure AIRL. Builder pattern
 
 ## Pre-Flight (BLOCKING)
 
-Before writing any `.airl` file, you MUST read `../AIRL/AIRL-Header.md`.
+Before writing any `.airl` file, you MUST read `../AIRL/AIRL-LLM-Guide.md`.
 
 ## Build & Test
 
